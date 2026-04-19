@@ -1,0 +1,55 @@
+rules:
+  action-setup:
+    status: done
+    comment: "Done"
+  appropriate-polling:
+    status: done
+    comment: "Done"
+  brands:
+    status: done
+    comment: "Done"
+  common-modules:
+    status: done
+    comment: "Done"
+  config-flow:
+    status: done
+    comment: "Done"
+  config-flow-test-coverage:
+    status: done
+    comment: "Done"
+  dependency-transparency:
+    status: done
+    comment: "Done"
+  docs-actions:
+    status: done
+    comment: "Done"
+  docs-high-level-description:
+    status: done
+    comment: "Done"
+  docs-installation-instructions:
+    status: done
+    comment: "Done"
+  docs-removal-instructions:
+    status: done
+    comment: "Done"
+  entity-event-setup:
+    status: done
+    comment: "Done"
+  entity-unique-id:
+    status: done
+    comment: "Done"
+  has-entity-name:
+    status: done
+    comment: "Done"
+  runtime-data:
+    status: done
+    comment: "Done"
+  test-before-configure:
+    status: done
+    comment: "Done"
+  test-before-setup:
+    status: done
+    comment: "Done"
+  unique-config-entry:
+    status: done
+    comment: "Done"

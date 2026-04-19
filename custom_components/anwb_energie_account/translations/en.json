@@ -1,0 +1,64 @@
+{
+    "config": {
+        "abort": {
+            "already_configured": "Account is already configured",
+            "reauth_successful": "Re-authentication was successful"
+        },
+        "error": {
+            "invalid_auth": "Invalid authentication URL or failed to exchange token."
+        },
+        "step": {
+            "reauth_confirm": {
+                "data": {
+                    "auth_code_url": "Redirected URL"
+                },
+                "data_description": {
+                    "auth_code_url": "Paste the entire URL starting with the ANWB login domain from your browser's address bar."
+                },
+                "description": "Your ANWB Energie Account authentication has expired or is invalid. Please open the following link to log in again:\n\n[Open Login]({auth_url})\n\nAfter logging in, you will be redirected to a blank page or an error page. Copy the **entire URL** from your browser's address bar and paste it below.",
+                "title": "Reauthenticate ANWB Energie Account"
+            },
+            "user": {
+                "data": {
+                    "auth_code_url": "Redirected URL"
+                },
+                "data_description": {
+                    "auth_code_url": "Paste the entire URL starting with the ANWB login domain from your browser's address bar."
+                },
+                "description": "Please open the following link to log in to your ANWB Energie Account:\n\n[Open Login]({auth_url})\n\nAfter logging in, you will be redirected to a blank page or an error page. Copy the **entire URL** from your browser's address bar and paste it below.",
+                "title": "Link ANWB Energie Account"
+            }
+        }
+    },
+    "entity": {
+        "sensor": {
+            "current_price": {
+                "name": "Current electricity price"
+            },
+            "export_cost": {
+                "name": "Monthly export cost"
+            },
+            "export_usage": {
+                "name": "Monthly export usage"
+            },
+            "fixed_cost": {
+                "name": "Monthly fixed cost"
+            },
+            "import_cost": {
+                "name": "Monthly import cost"
+            },
+            "import_usage": {
+                "name": "Monthly import usage"
+            },
+            "total_cost": {
+                "name": "Total monthly cost"
+            },
+            "yearly_export_usage": {
+                "name": "Yearly export usage"
+            },
+            "yearly_import_usage": {
+                "name": "Yearly import usage"
+            }
+        }
+    }
+}

@@ -1,0 +1,20 @@
+{
+  "domain": "anwb_energie_account",
+  "name": "ANWB Energie Account",
+  "codeowners": [
+    "@adrighem"
+  ],
+  "config_flow": true,
+  "dependencies": [
+    "application_credentials",
+    "recorder"
+  ],
+  "documentation": "https://www.home-assistant.io/integrations/anwb_energie_account",
+  "homekit": {},
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "version": "1.0.0",
+  "requirements": [],
+  "ssdp": [],
+  "zeroconf": []
+}

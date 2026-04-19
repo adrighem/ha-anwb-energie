@@ -1,0 +1,64 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Link ANWB Energie Account",
+        "description": "Please open the following link to log in to your ANWB Energie Account:\n\n[Open Login]({auth_url})\n\nAfter logging in, you will be redirected to a blank page or an error page. Copy the **entire URL** from your browser's address bar and paste it below.",
+        "data": {
+          "auth_code_url": "Redirected URL"
+        },
+        "data_description": {
+          "auth_code_url": "Paste the entire URL starting with the ANWB login domain from your browser's address bar."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Reauthenticate ANWB Energie Account",
+        "description": "Your ANWB Energie Account authentication has expired or is invalid. Please open the following link to log in again:\n\n[Open Login]({auth_url})\n\nAfter logging in, you will be redirected to a blank page or an error page. Copy the **entire URL** from your browser's address bar and paste it below.",
+        "data": {
+          "auth_code_url": "Redirected URL"
+        },
+        "data_description": {
+          "auth_code_url": "Paste the entire URL starting with the ANWB login domain from your browser's address bar."
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid authentication URL or failed to exchange token."
+    },
+    "abort": {
+      "already_configured": "Account is already configured",
+      "reauth_successful": "Re-authentication was successful"
+    }
+  },
+  "entity": {
+    "sensor": {
+      "import_usage": {
+        "name": "Monthly import usage"
+      },
+      "export_usage": {
+        "name": "Monthly export usage"
+      },
+      "import_cost": {
+        "name": "Monthly import cost"
+      },
+      "export_cost": {
+        "name": "Monthly export cost"
+      },
+      "yearly_import_usage": {
+        "name": "Yearly import usage"
+      },
+      "yearly_export_usage": {
+        "name": "Yearly export usage"
+      },
+      "fixed_cost": {
+        "name": "Monthly fixed cost"
+      },
+      "total_cost": {
+        "name": "Total monthly cost"
+      },
+      "current_price": {
+        "name": "Current electricity price"
+      }
+    }
+  }
+}

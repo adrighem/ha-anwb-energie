@@ -1,0 +1,64 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Koppel ANWB Energie Account",
+        "description": "Open de volgende link om in te loggen op je ANWB Energie Account:\n\n[Login openen]({auth_url})\n\nNa het inloggen word je doorgestuurd naar een lege pagina of een foutpagina. Kopieer de **volledige URL** uit de adresbalk van je browser en plak deze hieronder.",
+        "data": {
+          "auth_code_url": "Doorgestuurde URL"
+        },
+        "data_description": {
+          "auth_code_url": "Plak de volledige URL beginnend met https://login.anwb.nl/... uit de adresbalk van je browser."
+        }
+      },
+      "reauth_confirm": {
+        "title": "ANWB Energie Account Opnieuw Authenticeren",
+        "description": "Je ANWB Energie Account authenticatie is verlopen of ongeldig. Open de volgende link om opnieuw in te loggen:\n\n[Login openen]({auth_url})\n\nNa het inloggen word je doorgestuurd naar een lege pagina of een foutpagina. Kopieer de **volledige URL** uit de adresbalk van je browser en plak deze hieronder.",
+        "data": {
+          "auth_code_url": "Doorgestuurde URL"
+        },
+        "data_description": {
+          "auth_code_url": "Plak de volledige URL beginnend met https://login.anwb.nl/... uit de adresbalk van je browser."
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Ongeldige authenticatie-URL of tokenuitwisseling mislukt."
+    },
+    "abort": {
+      "already_configured": "Account is al geconfigureerd",
+      "reauth_successful": "Herauthenticatie was succesvol"
+    }
+  },
+  "entity": {
+    "sensor": {
+      "import_usage": {
+        "name": "Maandelijks importverbruik"
+      },
+      "export_usage": {
+        "name": "Maandelijks exportverbruik"
+      },
+      "import_cost": {
+        "name": "Maandelijkse importkosten"
+      },
+      "export_cost": {
+        "name": "Maandelijkse exportkosten"
+      },
+      "yearly_import_usage": {
+        "name": "Jaarlijks importverbruik"
+      },
+      "yearly_export_usage": {
+        "name": "Jaarlijks exportverbruik"
+      },
+      "fixed_cost": {
+        "name": "Maandelijkse vaste kosten"
+      },
+      "total_cost": {
+        "name": "Totale maandelijkse kosten"
+      },
+      "current_price": {
+        "name": "Huidige elektriciteitsprijs"
+      }
+    }
+  }
+}
