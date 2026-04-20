@@ -1,0 +1,31 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.env
+.venv
+.venv_*
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs and debug files
+*.log
+log.txt
+
+# Editor / OS files
+.DS_Store
+.idea/
+.vscode/
+
+# Tools
+apkeep
