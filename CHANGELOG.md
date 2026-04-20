@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/adrighem/ha-anwb-energie/compare/v0.8.2...v0.9.0) (2026-04-20)
+
+
+### Features
+
+* add support for gas subscriptions ([c55e149](https://github.com/adrighem/ha-anwb-energie/commit/c55e1497e577e013fe23e0ba62040f4ce6a66210))
+
 ## [0.8.2](https://github.com/adrighem/ha-anwb-energie/compare/v0.8.1...v0.8.2) (2026-04-20)
 
 
