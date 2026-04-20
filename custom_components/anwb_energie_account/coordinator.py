@@ -72,7 +72,9 @@ class ANWBDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         try:
             access_token = await self.auth.async_get_access_token()
         except ClientError as err:
-            raise ConfigEntryAuthFailed("Failed to get access token") from err
+            if getattr(err, "status", None) in (400, 401, 403):
+                raise ConfigEntryAuthFailed("Failed to get access token") from err
+            raise UpdateFailed(f"Network error fetching access token: {err}") from err
 
         session = self.auth.websession
         headers = {"Authorization": f"Bearer {access_token}"}
