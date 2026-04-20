@@ -92,7 +92,7 @@ async def test_update_data_with_gas(auth_mock):
                 return {"data": [{"startDate": "2026-04-01T00:00:00.000Z", "usage": 20.0}]}
             elif "tarieven/electricity" in url:
                 return {"data": [{"date": "2026-04-20T12:00:00.000Z", "values": {"allInPrijs": 20.0}}]}
-            elif "tarieven/gas-prices" in url:
+            elif "tarieven/gas" in url:
                 return {"data": [{"date": "2026-04-20T12:00:00.000Z", "values": {"allInPrijs": 120.0}}]}
             return {}
 

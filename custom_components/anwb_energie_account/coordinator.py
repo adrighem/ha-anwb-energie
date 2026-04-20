@@ -249,7 +249,7 @@ class ANWBDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             price_tasks.append(self._async_fetch_data(url_prices, self._kraken_token))
             
             url_gas_prices = (
-                "https://api.anwb.nl/energy/energy-services/v2/tarieven/gas-prices"
+                "https://api.anwb.nl/energy/energy-services/v2/tarieven/gas"
                 f"?startDate={day_start}&endDate={day_end}&interval=HOUR"
             )
             gas_price_tasks.append(self._async_fetch_data(url_gas_prices, self._kraken_token))

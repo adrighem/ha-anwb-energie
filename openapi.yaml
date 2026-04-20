@@ -412,7 +412,7 @@ paths:
         '200':
           description: Dynamic price data
 
-  /energy/energy-services/v2/tarieven/gas-prices:
+  /energy/energy-services/v2/tarieven/gas:
     get:
       summary: Get Gas Prices
       description: Retrieve dynamic daily gas prices.
