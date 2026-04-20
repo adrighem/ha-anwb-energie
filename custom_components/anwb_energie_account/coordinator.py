@@ -21,7 +21,7 @@ from homeassistant.components.recorder.statistics import (
     statistics_during_period,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CURRENCY_EURO, UnitOfEnergy
+from homeassistant.const import CURRENCY_EURO, UnitOfEnergy, UnitOfVolume
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -35,6 +35,9 @@ from .const import (
     NETBEHEERKOSTEN,
     VASTE_LEVERINGSKOSTEN,
     VERMINDERING_ENERGIEBELASTING,
+    VASTE_LEVERINGSKOSTEN_GAS,
+    NETBEHEERKOSTEN_GAS,
+    VERMINDERING_ENERGIEBELASTING_GAS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -148,6 +151,8 @@ class ANWBDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             async with session.get(url, headers=headers) as resp:
                 if resp.status in (401, 403):
                     raise UpdateFailed(f"Kraken token expired or invalid fetching data from {url}")
+                if resp.status == 404:
+                    return {}
                 resp.raise_for_status()
                 return await resp.json()
         except ClientError as err:
@@ -206,18 +211,34 @@ class ANWBDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             f"?startDate={c_start}&endDate={end}"
             f"&contractStartDate={c_start}&interval=MONTH"
         )
+        url_import_gas = (
+            "https://api.anwb.nl/energy/energy-services/v1/accounts/"
+            f"{self._account_number}/gas/cache"
+            f"?startDate={start}&endDate={end}"
+            f"&contractStartDate={c_start}&interval=HOUR"
+        )
+        url_import_gas_month = (
+            "https://api.anwb.nl/energy/energy-services/v1/accounts/"
+            f"{self._account_number}/gas/cache"
+            f"?startDate={c_start}&endDate={end}"
+            f"&contractStartDate={c_start}&interval=MONTH"
+        )
 
-        res_import, res_export, res_imp_month, res_exp_month = await asyncio.gather(
+        res_import, res_export, res_imp_month, res_exp_month, res_import_gas, res_import_gas_month = await asyncio.gather(
             self._async_fetch_data(url_import, self._kraken_token),
             self._async_fetch_data(url_export, self._kraken_token),
             self._async_fetch_data(url_import_month, self._kraken_token),
             self._async_fetch_data(url_export_month, self._kraken_token),
+            self._async_fetch_data(url_import_gas, self._kraken_token),
+            self._async_fetch_data(url_import_gas_month, self._kraken_token),
         )
 
         price_map: dict[str, float] = {}
         end_day = min(last_day, now.day + 1)
 
+        gas_price_map: dict[str, float] = {}
         price_tasks = []
+        gas_price_tasks = []
         for d in range(1, end_day + 1):
             day_start = f"{now.year}-{now.month:02d}-{d:02d}T00:00:00.000Z"
             day_end = f"{now.year}-{now.month:02d}-{d:02d}T23:59:59.999Z"
@@ -226,6 +247,12 @@ class ANWBDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 f"?startDate={day_start}&endDate={day_end}&interval=HOUR"
             )
             price_tasks.append(self._async_fetch_data(url_prices, self._kraken_token))
+            
+            url_gas_prices = (
+                "https://api.anwb.nl/energy/energy-services/v2/tarieven/gas-prices"
+                f"?startDate={day_start}&endDate={day_end}&interval=HOUR"
+            )
+            gas_price_tasks.append(self._async_fetch_data(url_gas_prices, self._kraken_token))
 
         try:
             prices_results = await asyncio.gather(*price_tasks)
@@ -235,6 +262,19 @@ class ANWBDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         dt_str = p.get("date", "").replace("+00:00", ".000Z")
                         vals = p.get("values", {})
                         price_map[dt_str] = vals.get("allInPrijs", 0.0)
+        except UpdateFailed as err:
+            if "Kraken token expired" in str(err):
+                raise
+            pass
+
+        try:
+            gas_prices_results = await asyncio.gather(*gas_price_tasks)
+            for res_prices in gas_prices_results:
+                if res_prices.get("data"):
+                    for p in res_prices["data"]:
+                        dt_str = p.get("date", "").replace("+00:00", ".000Z")
+                        vals = p.get("values", {})
+                        gas_price_map[dt_str] = vals.get("allInPrijs", 0.0)
         except UpdateFailed as err:
             if "Kraken token expired" in str(err):
                 raise
@@ -254,6 +294,16 @@ class ANWBDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         filtered_prices = {
             k: v
             for k, v in price_map.items()
+            if k.startswith(today_str) or k.startswith(tomorrow_str)
+        }
+
+        current_gas_price = None
+        if current_hour_str in gas_price_map:
+            current_gas_price = gas_price_map[current_hour_str] / 100.0
+
+        filtered_gas_prices = {
+            k: v
+            for k, v in gas_price_map.items()
             if k.startswith(today_str) or k.startswith(tomorrow_str)
         }
 
@@ -297,6 +347,32 @@ class ANWBDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             d.get("usage", 0.0) for d in res_exp_month.get("data", [])
         )
 
+        gas_usage = 0.0
+        gas_cost = 0.0
+        api_vaste_kosten_gas = 0.0
+
+        if res_import_gas.get("data"):
+            first_entry = res_import_gas["data"][0]
+            if "vasteKosten" in first_entry:
+                vk = first_entry["vasteKosten"]
+                api_vaste_kosten_gas = (
+                    vk.get("abonnementsKosten", 0)
+                    + vk.get("netbeheerKosten", 0)
+                    + vk.get("verminderingEnergieBelasting", 0)
+                )
+
+            for d in res_import_gas["data"]:
+                usage = d.get("usage", 0.0)
+                timestamp = d.get("startDate")
+                price_cents = gas_price_map.get(timestamp, 0.0)
+
+                gas_usage += usage
+                gas_cost += (usage * price_cents) / 100.0
+
+        yearly_gas_usage = sum(
+            d.get("usage", 0.0) for d in res_import_gas_month.get("data", [])
+        )
+
         days_with_data = now.day
         if abs(api_vaste_kosten) > 0.01:
             total_fixed_costs = api_vaste_kosten
@@ -319,11 +395,34 @@ class ANWBDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 + (NETBEHEERKOSTEN * fraction)
                 + (VERMINDERING_ENERGIEBELASTING * fraction)
             )
+            
+        if abs(api_vaste_kosten_gas) > 0.01:
+            total_fixed_costs_gas = api_vaste_kosten_gas
+        else:
+            latest_ts_gas = None
+            for d in res_import_gas.get("data", []):
+                if d.get("usage", 0.0) > 0.0:
+                    ts = d.get("startDate")
+                    if not latest_ts_gas or ts > latest_ts_gas:
+                        latest_ts_gas = ts
+
+            days_with_data_gas = now.day
+            if latest_ts_gas:
+                days_with_data_gas = datetime.strptime(latest_ts_gas[:10], "%Y-%m-%d").day
+                
+            fraction_gas = days_with_data_gas / float(last_day)
+            total_fixed_costs_gas = (
+                (VASTE_LEVERINGSKOSTEN_GAS * fraction_gas)
+                + (NETBEHEERKOSTEN_GAS * fraction_gas)
+                + (VERMINDERING_ENERGIEBELASTING_GAS * fraction_gas)
+            )
 
         total_cost = import_cost - export_cost + total_fixed_costs
+        total_cost_gas = gas_cost + total_fixed_costs_gas
 
         await self._insert_statistics(
-            res_import.get("data", []), res_export.get("data", []), price_map
+            res_import.get("data", []), res_export.get("data", []), price_map,
+            res_import_gas.get("data", []), gas_price_map
         )
 
         return {
@@ -331,31 +430,41 @@ class ANWBDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "import_cost": import_cost,
             "export_usage": export_usage,
             "export_cost": export_cost,
+            "gas_usage": gas_usage,
+            "gas_cost": gas_cost,
             "yearly_import_usage": yearly_import_usage,
             "yearly_export_usage": yearly_export_usage,
+            "yearly_gas_usage": yearly_gas_usage,
             "fixed_cost": total_fixed_costs,
+            "fixed_cost_gas": total_fixed_costs_gas,
             "total_cost": total_cost,
+            "total_cost_gas": total_cost_gas,
             "account_number": self._account_number,
             "current_price": current_price,
             "prices_today": filtered_prices,
+            "current_gas_price": current_gas_price,
+            "gas_prices_today": filtered_gas_prices,
             "account_address": getattr(self, "_account_address", None),
         }
 
     async def _insert_statistics(
-        self, import_data: list, export_data: list, price_map: dict
+        self, import_data: list, export_data: list, price_map: dict,
+        gas_data: list, gas_price_map: dict
     ) -> None:
         """Insert ANWB statistics."""
-        for sensor_type, is_production, is_cost, data_list in [
-            ("import_usage", False, False, import_data),
-            ("export_usage", True, False, export_data),
-            ("import_cost", False, True, import_data),
-            ("export_cost", True, True, export_data),
+        for sensor_type, is_production, is_cost, data_list, p_map in [
+            ("import_usage", False, False, import_data, price_map),
+            ("export_usage", True, False, export_data, price_map),
+            ("import_cost", False, True, import_data, price_map),
+            ("export_cost", True, True, export_data, price_map),
+            ("gas_usage", False, False, gas_data, gas_price_map),
+            ("gas_cost", False, True, gas_data, gas_price_map),
         ]:
             if not data_list:
                 continue
 
-            unit_class = None if is_cost else "energy"
-            unit = CURRENCY_EURO if is_cost else UnitOfEnergy.KILO_WATT_HOUR
+            unit_class = None if is_cost else ("energy" if "import" in sensor_type or "export" in sensor_type else "volume")
+            unit = CURRENCY_EURO if is_cost else (UnitOfEnergy.KILO_WATT_HOUR if "import" in sensor_type or "export" in sensor_type else UnitOfVolume.CUBIC_METERS)
             statistic_id = (
                 f"{DOMAIN}:{sensor_type}_{self._account_number}".lower().replace(
                     "-", "_"
@@ -412,7 +521,7 @@ class ANWBDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 usage = data.get("usage", 0.0)
                 if is_cost:
                     timestamp = data.get("startDate")
-                    price_cents = price_map.get(timestamp, 0.0)
+                    price_cents = p_map.get(timestamp, 0.0)
                     val = (usage * price_cents) / 100.0
                 else:
                     val = usage

@@ -58,6 +58,24 @@
       },
       "current_price": {
         "name": "Current electricity price"
+      },
+      "gas_usage": {
+        "name": "Monthly gas usage"
+      },
+      "gas_cost": {
+        "name": "Monthly gas cost"
+      },
+      "yearly_gas_usage": {
+        "name": "Yearly gas usage"
+      },
+      "fixed_cost_gas": {
+        "name": "Monthly fixed gas cost"
+      },
+      "total_cost_gas": {
+        "name": "Total monthly gas cost"
+      },
+      "current_gas_price": {
+        "name": "Current gas price"
       }
     }
   }

@@ -58,6 +58,24 @@
       },
       "current_price": {
         "name": "Huidige elektriciteitsprijs"
+      },
+      "gas_usage": {
+        "name": "Maandelijks gasverbruik"
+      },
+      "gas_cost": {
+        "name": "Maandelijkse gaskosten"
+      },
+      "yearly_gas_usage": {
+        "name": "Jaarlijks gasverbruik"
+      },
+      "fixed_cost_gas": {
+        "name": "Maandelijkse vaste gaskosten"
+      },
+      "total_cost_gas": {
+        "name": "Totale maandelijkse gaskosten"
+      },
+      "current_gas_price": {
+        "name": "Huidige gasprijs"
       }
     }
   }

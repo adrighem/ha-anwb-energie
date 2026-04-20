@@ -10,7 +10,7 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.const import CURRENCY_EURO, UnitOfEnergy
+from homeassistant.const import CURRENCY_EURO, UnitOfEnergy, UnitOfVolume
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
@@ -82,6 +82,47 @@ SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
         native_unit_of_measurement=f"{CURRENCY_EURO}/{UnitOfEnergy.KILO_WATT_HOUR}",
         state_class=SensorStateClass.MEASUREMENT,
     ),
+    SensorEntityDescription(
+        key="gas_usage",
+        translation_key="gas_usage",
+        device_class=SensorDeviceClass.GAS,
+        native_unit_of_measurement=UnitOfVolume.CUBIC_METERS,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+    ),
+    SensorEntityDescription(
+        key="gas_cost",
+        translation_key="gas_cost",
+        device_class=SensorDeviceClass.MONETARY,
+        native_unit_of_measurement=CURRENCY_EURO,
+        state_class=SensorStateClass.TOTAL,
+    ),
+    SensorEntityDescription(
+        key="yearly_gas_usage",
+        translation_key="yearly_gas_usage",
+        device_class=SensorDeviceClass.GAS,
+        native_unit_of_measurement=UnitOfVolume.CUBIC_METERS,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+    ),
+    SensorEntityDescription(
+        key="fixed_cost_gas",
+        translation_key="fixed_cost_gas",
+        device_class=SensorDeviceClass.MONETARY,
+        native_unit_of_measurement=CURRENCY_EURO,
+        state_class=SensorStateClass.TOTAL,
+    ),
+    SensorEntityDescription(
+        key="total_cost_gas",
+        translation_key="total_cost_gas",
+        device_class=SensorDeviceClass.MONETARY,
+        native_unit_of_measurement=CURRENCY_EURO,
+        state_class=SensorStateClass.TOTAL,
+    ),
+    SensorEntityDescription(
+        key="current_gas_price",
+        translation_key="current_gas_price",
+        native_unit_of_measurement=f"{CURRENCY_EURO}/{UnitOfVolume.CUBIC_METERS}",
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
 )
 
 
@@ -140,19 +181,28 @@ class ANWBEnergieAccountSensor(
         if val is None:
             return None
         # Provide more precision for current_price
-        if self.entity_description.key == "current_price":
+        if self.entity_description.key in ("current_price", "current_gas_price"):
             return round(val, 4)
         return round(val, 2)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
         """Return the state attributes."""
-        if self.entity_description.key == "current_price" and self.coordinator.data:
-            prices = self.coordinator.data.get("prices_today", {})
-            return {
-                "prices": [
-                    {"start_time": k, "price": round(v / 100.0, 4)}
-                    for k, v in prices.items()
-                ]
-            }
+        if self.coordinator.data:
+            if self.entity_description.key == "current_price":
+                prices = self.coordinator.data.get("prices_today", {})
+                return {
+                    "prices": [
+                        {"start_time": k, "price": round(v / 100.0, 4)}
+                        for k, v in prices.items()
+                    ]
+                }
+            elif self.entity_description.key == "current_gas_price":
+                prices = self.coordinator.data.get("gas_prices_today", {})
+                return {
+                    "prices": [
+                        {"start_time": k, "price": round(v / 100.0, 4)}
+                        for k, v in prices.items()
+                    ]
+                }
         return None
