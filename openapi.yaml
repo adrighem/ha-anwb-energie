@@ -1,0 +1,423 @@
+openapi: 3.1.0
+info:
+  title: ANWB Energie API
+  version: 1.1.0
+  description: >
+    Undocumented internal APIs used by the ANWB Energie portal and mobile app to fetch dynamic prices, contracts, and consumption data.
+    This API is built on top of the Kraken/EnergyZero platforms and requires OAuth 2.0 authentication.
+servers:
+  - url: https://api.anwb.nl
+    description: Main ANWB Services API (Legacy REST)
+  - url: https://api.anwb-kraken.energy
+    description: Kraken GraphQL API (New Platform)
+  - url: https://login.anwb.nl
+    description: Authentication API
+
+components:
+  securitySchemes:
+    OAuth2:
+      type: oauth2
+      flows:
+        authorizationCode:
+          authorizationUrl: https://login.anwb.nl/49acae90-1d8b-46a5-943a-33da44624219/login/authorize
+          tokenUrl: https://login.anwb.nl/49acae90-1d8b-46a5-943a-33da44624219/login/token
+          scopes:
+            openid: OpenID Connect
+            profile: Profile information
+            email: Email address
+            offline_access: Offline Access
+    KrakenToken:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: The token obtained from the `/energy/energy-services/v1/auth/kraken-token` endpoint.
+
+security:
+  - KrakenToken: []
+
+paths:
+  /49acae90-1d8b-46a5-943a-33da44624219/login/authorize:
+    get:
+      summary: OAuth 2.0 Authorization
+      tags:
+        - Authentication
+      security: []
+      responses:
+        '302':
+          description: Redirect to login page
+
+  /49acae90-1d8b-46a5-943a-33da44624219/login/token:
+    post:
+      summary: OAuth 2.0 Token Exchange
+      tags:
+        - Authentication
+      security: []
+      responses:
+        '200':
+          description: Returns standard OAuth 2.0 Access and Refresh tokens
+
+  /energy/energy-services/v1/auth/kraken-token:
+    post:
+      summary: Exchange ANWB OAuth token for Kraken Token
+      description: Exchanges the ANWB standard OAuth2 access token for a Kraken platform-specific access token.
+      tags:
+        - Authentication
+      security:
+        - OAuth2: [openid, profile, email, offline_access]
+      responses:
+        '200':
+          description: Successful exchange
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accessToken:
+                    type: string
+                    description: The token to use for Kraken and Energy Services API endpoints.
+
+  /v1/graphql/:
+    post:
+      servers:
+        - url: https://api.anwb-kraken.energy
+      summary: Kraken GraphQL API
+      description: Main GraphQL endpoint for retrieving account information, properties, ledgers, and supply points on the new Kraken backend.
+      tags:
+        - Account (Kraken)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                query:
+                  type: string
+                  description: |
+                    Supported Query Roots:
+                    - `viewer { accounts { number properties { address energyMeterPoints { ean agreements } } } }`
+                    - `supplyPoint(externalIdentifier: String!, marketName: String!) { readings(startAt: DateTime!, endAt: DateTime!, readingType: ReadingTypes!) { importReadings { edges { node { value intervalStart intervalEnd } } } } }`
+                    - `viewer { accounts { ... on AccountType { ledgers { number paymentAdequacy { suggestedNewMonthlyAmount consumption { edges { node { charges } } } } statements provisionalTransactions } } } }`
+                variables:
+                  type: object
+            examples:
+              AccountInfo:
+                summary: Get Account Number and Address
+                value:
+                  query: |
+                    {
+                      viewer {
+                        accounts {
+                          number
+                          ... on AccountType {
+                            properties {
+                              address
+                            }
+                          }
+                        }
+                      }
+                    }
+                  variables: {}
+              AccountLedgers:
+                summary: Get Ledgers and Charges
+                value:
+                  query: |
+                    {
+                      viewer {
+                        accounts {
+                          number
+                          ... on AccountType {
+                            ledgers {
+                              number
+                              paymentAdequacy {
+                                suggestedNewMonthlyAmount
+                                consumption(first: 5) {
+                                  edges {
+                                    node {
+                                      marketName
+                                      charges(first: 5) {
+                                        edges {
+                                          node {
+                                            periodStart
+                                            periodEnd
+                                            charge
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  variables: {}
+      responses:
+        '200':
+          description: GraphQL Response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+
+  /energy/energy-services/v0/accounts/{account_number}/bills:
+    get:
+      summary: Get Historical Bills
+      description: Retrieve legacy bill statements. Note - migrated Kraken users may receive 401 AE-102 errors here and should use the GraphQL ledgers.statements query.
+      tags:
+        - Account (Legacy)
+      parameters:
+        - in: path
+          name: account_number
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of bills
+
+  /energy/energy-services/v0/accounts/{account_number}/payments:
+    get:
+      summary: Get Account Payments
+      description: Retrieve legacy payment records. Note - migrated Kraken users may receive 401 AE-102 errors here.
+      tags:
+        - Account (Legacy)
+      parameters:
+        - in: path
+          name: account_number
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of payments
+
+  /energy/energy-services/v1/accounts/{account_number}/electricity/cache:
+    get:
+      summary: Get Electricity Consumption (Import)
+      description: Retrieve historical electricity consumption and associated fixed costs. Note - migrated Kraken users receive 401 AE-102 here and must use GraphQL supplyPoint readings.
+      tags:
+        - Energy Data (Legacy)
+      parameters:
+        - in: path
+          name: account_number
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: startDate
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: endDate
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: contractStartDate
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: interval
+          required: true
+          schema:
+            type: string
+            enum: [HOUR, DAY, MONTH, YEAR]
+      responses:
+        '200':
+          description: Electricity usage data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        startDate:
+                          type: string
+                          format: date-time
+                        usage:
+                          type: number
+                        vasteKosten:
+                          type: object
+
+  /energy/energy-services/v1/accounts/{account_number}/production/cache:
+    get:
+      summary: Get Electricity Production (Export)
+      description: Retrieve historical electricity production (solar export). Legacy endpoint.
+      tags:
+        - Energy Data (Legacy)
+      parameters:
+        - in: path
+          name: account_number
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: startDate
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: endDate
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: contractStartDate
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: interval
+          required: true
+          schema:
+            type: string
+            enum: [HOUR, DAY, MONTH, YEAR]
+      responses:
+        '200':
+          description: Electricity production data
+
+  /energy/energy-services/v1/accounts/{account_number}/gas/cache:
+    get:
+      summary: Get Gas Consumption
+      description: Retrieve historical gas consumption. Legacy endpoint.
+      tags:
+        - Energy Data (Legacy)
+      parameters:
+        - in: path
+          name: account_number
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: startDate
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: endDate
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: contractStartDate
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: interval
+          required: true
+          schema:
+            type: string
+            enum: [HOUR, DAY, MONTH, YEAR]
+      responses:
+        '200':
+          description: Gas usage data
+
+  /energy/energy-services/v0/tarieven/electricity/actueel:
+    get:
+      summary: Get Current Electricity Price
+      description: Retrieve the current actual electricity price including taxes.
+      tags:
+        - Prices
+      responses:
+        '200':
+          description: Current electricity price
+
+  /energy/energy-services/v0/tarieven/gas/actueel:
+    get:
+      summary: Get Current Gas Price
+      description: Retrieve the current actual gas price including taxes.
+      tags:
+        - Prices
+      responses:
+        '200':
+          description: Current gas price
+
+  /energy/energy-services/v2/tarieven/electricity:
+    get:
+      summary: Get Electricity Prices (Tarieven v2)
+      description: Retrieve dynamic hourly electricity prices applicable to the user's contract.
+      tags:
+        - Prices
+      parameters:
+        - in: query
+          name: startDate
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: endDate
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: interval
+          required: true
+          schema:
+            type: string
+            enum: [HOUR, DAY]
+      responses:
+        '200':
+          description: Dynamic price data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        date:
+                          type: string
+                          format: date-time
+                        values:
+                          type: object
+                          properties:
+                            allInPrijs:
+                              type: number
+                              description: The dynamic price per kWh including taxes, usually represented in cents (divide by 100 for Euro).
+
+  /energy/energy-services/v2/tarieven/electricity-prices:
+    get:
+      summary: Get Electricity Prices
+      description: Additional endpoint for electricity prices discovered in the app.
+      tags:
+        - Prices
+      responses:
+        '200':
+          description: Dynamic price data
+
+  /energy/energy-services/v2/tarieven/gas-prices:
+    get:
+      summary: Get Gas Prices
+      description: Retrieve dynamic daily gas prices.
+      tags:
+        - Prices
+      responses:
+        '200':
+          description: Dynamic gas price data
