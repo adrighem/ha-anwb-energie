@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/adrighem/ha-anwb-energie/compare/v0.9.0...v0.9.1) (2026-04-20)
+
+
+### Bug Fixes
+
+* correct API endpoint for dynamic gas prices ([e66eab6](https://github.com/adrighem/ha-anwb-energie/commit/e66eab6feac7e0a34b7afb9b86df96bc8255b9a9))
+
 ## [0.9.0](https://github.com/adrighem/ha-anwb-energie/compare/v0.8.2...v0.9.0) (2026-04-20)
 
 
