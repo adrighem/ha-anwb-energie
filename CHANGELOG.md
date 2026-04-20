@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.2](https://github.com/adrighem/ha-anwb-energie/compare/v0.8.1...v0.8.2) (2026-04-20)
+
+
+### Bug Fixes
+
+* handle Kraken token expiry and retry transparently ([8f1ab2c](https://github.com/adrighem/ha-anwb-energie/commit/8f1ab2c05366ff85273469ccfb86376b5102c1ad))
+
 ## [0.8.1](https://github.com/adrighem/ha-anwb-energie/compare/v0.8.0...v0.8.1) (2026-04-20)
 
 
