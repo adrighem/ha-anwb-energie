@@ -116,7 +116,7 @@ class ANWBDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 GRAPHQL_URL, json={"query": query, "variables": {}}, headers=headers
             ) as resp:
                 if resp.status in (401, 403):
-                    raise ConfigEntryAuthFailed("Failed to fetch account number (auth)")
+                    raise UpdateFailed("Kraken token expired or invalid fetching account number")
                 resp.raise_for_status()
                 data = await resp.json()
                 accounts = data.get("data", {}).get("viewer", {}).get("accounts", [])
@@ -137,9 +137,7 @@ class ANWBDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 return {"number": number, "address": address}
         except ClientError as err:
             if getattr(err, "status", None) in (401, 403):
-                raise ConfigEntryAuthFailed(
-                    "Failed to fetch account number (auth)"
-                ) from err
+                raise UpdateFailed("Kraken token expired or invalid fetching account number") from err
             raise UpdateFailed(f"Failed to fetch account number: {err}") from err
 
     async def _async_fetch_data(self, url: str, kraken_token: str) -> dict[str, Any]:
@@ -149,18 +147,27 @@ class ANWBDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         try:
             async with session.get(url, headers=headers) as resp:
                 if resp.status in (401, 403):
-                    raise ConfigEntryAuthFailed(f"Auth failed fetching data from {url}")
+                    raise UpdateFailed(f"Kraken token expired or invalid fetching data from {url}")
                 resp.raise_for_status()
                 return await resp.json()
         except ClientError as err:
             if getattr(err, "status", None) in (401, 403):
-                raise ConfigEntryAuthFailed(
-                    f"Auth failed fetching data from {url}"
-                ) from err
+                raise UpdateFailed(f"Kraken token expired or invalid fetching data from {url}") from err
             raise UpdateFailed(f"Error fetching data from {url}: {err}") from err
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from ANWB API."""
+        try:
+            return await self._async_update_data_internal()
+        except UpdateFailed as err:
+            if "Kraken token expired" in str(err):
+                _LOGGER.debug("Kraken token expired, refreshing and retrying")
+                self._kraken_token = None
+                return await self._async_update_data_internal()
+            raise
+
+    async def _async_update_data_internal(self) -> dict[str, Any]:
+        """Internal method to fetch data from ANWB API."""
         if not self._kraken_token:
             self._kraken_token = await self._async_get_kraken_token()
 
@@ -200,16 +207,12 @@ class ANWBDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             f"&contractStartDate={c_start}&interval=MONTH"
         )
 
-        try:
-            res_import, res_export, res_imp_month, res_exp_month = await asyncio.gather(
-                self._async_fetch_data(url_import, self._kraken_token),
-                self._async_fetch_data(url_export, self._kraken_token),
-                self._async_fetch_data(url_import_month, self._kraken_token),
-                self._async_fetch_data(url_export_month, self._kraken_token),
-            )
-        except UpdateFailed:
-            self._kraken_token = None
-            raise
+        res_import, res_export, res_imp_month, res_exp_month = await asyncio.gather(
+            self._async_fetch_data(url_import, self._kraken_token),
+            self._async_fetch_data(url_export, self._kraken_token),
+            self._async_fetch_data(url_import_month, self._kraken_token),
+            self._async_fetch_data(url_export_month, self._kraken_token),
+        )
 
         price_map: dict[str, float] = {}
         end_day = min(last_day, now.day + 1)
@@ -232,7 +235,9 @@ class ANWBDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         dt_str = p.get("date", "").replace("+00:00", ".000Z")
                         vals = p.get("values", {})
                         price_map[dt_str] = vals.get("allInPrijs", 0.0)
-        except UpdateFailed:
+        except UpdateFailed as err:
+            if "Kraken token expired" in str(err):
+                raise
             pass
 
         # Determine current price
