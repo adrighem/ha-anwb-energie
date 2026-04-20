@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="icon.svg" width="150" alt="ANWB Energie Account Logo">
+</p>
+
 # ANWB Energie Account for Home Assistant
 
 A custom component for Home Assistant that natively integrates your ANWB Energie account. It securely fetches your electricity consumption, production, and cost data. 
