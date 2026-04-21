@@ -24,6 +24,8 @@ Using the popular [ApexCharts Card](https://github.com/RomRider/apexcharts-card)
 ### Electricity Prices
 ```yaml
 type: custom:apexcharts-card
+experimental:
+  color_threshold: true
 header:
   show: true
   title: Electricity Prices Today
