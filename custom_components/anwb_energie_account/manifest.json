@@ -9,7 +9,8 @@
     "application_credentials",
     "recorder"
   ],
-  "documentation": "https://www.home-assistant.io/integrations/anwb_energie_account",
+  "documentation": "https://github.com/adrighem/ha-anwb-energie",
+  "issue_tracker": "https://github.com/adrighem/ha-anwb-energie/issues",
   "homekit": {},
   "integration_type": "service",
   "iot_class": "cloud_polling",
