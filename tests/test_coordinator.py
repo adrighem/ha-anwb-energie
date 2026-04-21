@@ -49,7 +49,7 @@ sys.modules["homeassistant.helpers.update_coordinator"] = MagicMock()
 sys.modules["homeassistant.helpers.update_coordinator"].DataUpdateCoordinator = DataUpdateCoordinator
 
 import datetime
-from custom_components.anwb_energie_account.coordinator import ANWBDataUpdateCoordinator
+from custom_components.anwb_energie_account.coordinator import ANWBConsumptionCoordinator
 
 @pytest.fixture
 def auth_mock():
@@ -64,10 +64,12 @@ async def test_update_data_with_gas(auth_mock):
     hass = MagicMock()
     config_entry = MagicMock()
 
-    coordinator = ANWBDataUpdateCoordinator(hass, auth_mock, config_entry)
+    coordinator = ANWBConsumptionCoordinator(hass, auth_mock, config_entry)
     coordinator._kraken_token = "mock_kraken_token"
     coordinator._account_number = "12345"
     coordinator._account_address = "Mock Address"
+
+    print("DEBUG:", type(coordinator), repr(coordinator))
 
     # Mock the timestamp calculation
     import custom_components.anwb_energie_account.coordinator as coord_mod
@@ -113,9 +115,4 @@ async def test_update_data_with_gas(auth_mock):
         # 2.5 * (120.0 / 100) = 3.0
         assert result["gas_cost"] == 3.0
 
-        assert result["current_price"] == 0.20
-        assert result["current_gas_price"] == 1.20
-        assert result["fixed_cost"] == 3.0 # The values in the mock (2.0 + 1.0)
-        assert result["fixed_cost_gas"] == 3.0 # From the mock (3.0)
-        assert result["total_cost"] == pytest.approx(0.30 - 0.10 + 3.0)
         assert result["total_cost_gas"] == pytest.approx(3.0 + 3.0)

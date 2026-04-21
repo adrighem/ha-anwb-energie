@@ -12,11 +12,21 @@ sys.modules["homeassistant.const"] = MagicMock()
 sys.modules["homeassistant.exceptions"] = MagicMock()
 sys.modules["homeassistant.config_entries"] = MagicMock()
 sys.modules["homeassistant.components"] = MagicMock()
+sys.modules["voluptuous"] = MagicMock()
 sys.modules["homeassistant.components.application_credentials"] = MagicMock()
 sys.modules["homeassistant.helpers"] = MagicMock()
 sys.modules["homeassistant.helpers.aiohttp_client"] = MagicMock()
 sys.modules["homeassistant.helpers.config_entry_oauth2_flow"] = MagicMock()
+class DataUpdateCoordinatorMeta(type):
+    def __getitem__(cls, val):
+        return cls
+
+class DataUpdateCoordinator(metaclass=DataUpdateCoordinatorMeta):
+    def __init__(self, *args, **kwargs):
+        self.data = None
+
 sys.modules["homeassistant.helpers.update_coordinator"] = MagicMock()
+sys.modules["homeassistant.helpers.update_coordinator"].DataUpdateCoordinator = DataUpdateCoordinator
 sys.modules["homeassistant.util"] = MagicMock()
 sys.modules["homeassistant.components.recorder"] = MagicMock()
 sys.modules["homeassistant.components.recorder.models"] = MagicMock()

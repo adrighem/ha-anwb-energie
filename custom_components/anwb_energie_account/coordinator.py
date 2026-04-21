@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import calendar
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 import logging
 from typing import Any
@@ -42,27 +43,25 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-type ANWBEnergieAccountConfigEntry = ConfigEntry[ANWBDataUpdateCoordinator]
-
-
-class ANWBDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Class to manage fetching ANWB Energie Account data."""
-
-    config_entry: ANWBEnergieAccountConfigEntry
+class ANWBBaseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
+    """Base coordinator to manage ANWB token and account."""
 
     def __init__(
         self,
         hass: HomeAssistant,
+        logger: logging.Logger,
+        name: str,
+        update_interval: timedelta,
         auth: AsyncConfigEntryAuth,
-        config_entry: ANWBEnergieAccountConfigEntry,
+        config_entry: ConfigEntry,
     ) -> None:
         """Initialize coordinator."""
         self.config_entry = config_entry
         super().__init__(
             hass,
-            _LOGGER,
-            name=DOMAIN,
-            update_interval=timedelta(minutes=30),
+            logger,
+            name=name,
+            update_interval=update_interval,
             config_entry=config_entry,
         )
         self.auth = auth
@@ -160,6 +159,168 @@ class ANWBDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 raise UpdateFailed(f"Kraken token expired or invalid fetching data from {url}") from err
             raise UpdateFailed(f"Error fetching data from {url}: {err}") from err
 
+
+class ANWBPricingCoordinator(ANWBBaseCoordinator):
+    """Coordinator to fetch pricing data smartly."""
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        auth: AsyncConfigEntryAuth,
+        config_entry: ConfigEntry,
+    ) -> None:
+        super().__init__(
+            hass,
+            _LOGGER,
+            name=f"{DOMAIN}_pricing",
+            update_interval=timedelta(minutes=30),
+            auth=auth,
+            config_entry=config_entry,
+        )
+
+    async def _async_update_data(self) -> dict[str, Any]:
+        try:
+            return await self._async_update_data_internal()
+        except UpdateFailed as err:
+            if "Kraken token expired" in str(err):
+                _LOGGER.debug("Kraken token expired, refreshing and retrying")
+                self._kraken_token = None
+                return await self._async_update_data_internal()
+            raise
+
+    async def _async_update_data_internal(self) -> dict[str, Any]:
+        if not self._kraken_token:
+            self._kraken_token = await self._async_get_kraken_token()
+
+        if not self._account_number:
+            info = await self._async_get_account_info(self._kraken_token)
+            self._account_number = info["number"]
+            self._account_address = info["address"]
+
+        now = dt_util.utcnow()
+        current_hour_str = now.replace(minute=0, second=0, microsecond=0).strftime("%Y-%m-%dT%H:00:00.000Z")
+        today_str = now.strftime("%Y-%m-%d")
+        tomorrow = now + timedelta(days=1)
+        tomorrow_str = tomorrow.strftime("%Y-%m-%d")
+
+        has_tomorrow_electricity = False
+        has_tomorrow_gas = False
+
+        if self.data:
+            prices = self.data.get("prices_today", {})
+            gas_prices = self.data.get("gas_prices_today", {})
+            for k in prices:
+                if k.startswith(tomorrow_str):
+                    has_tomorrow_electricity = True
+                    break
+            for k in gas_prices:
+                if k.startswith(tomorrow_str):
+                    has_tomorrow_gas = True
+                    break
+
+        fetch_electricity = not has_tomorrow_electricity and now.hour >= 15
+        fetch_gas = not has_tomorrow_gas and now.hour >= 6
+
+        if not self.data:
+            fetch_electricity = True
+            fetch_gas = True
+
+        if not fetch_electricity and not fetch_gas and self.data:
+            return dict(self.data)
+
+        price_map: dict[str, float] = dict(self.data.get("_raw_price_map", {})) if self.data else {}
+        gas_price_map: dict[str, float] = dict(self.data.get("_raw_gas_price_map", {})) if self.data else {}
+
+        price_tasks = []
+        gas_price_tasks = []
+
+        days_to_fetch = [now, tomorrow]
+
+        for d in days_to_fetch:
+            day_start = f"{d.year}-{d.month:02d}-{d.day:02d}T00:00:00.000Z"
+            day_end = f"{d.year}-{d.month:02d}-{d.day:02d}T23:59:59.999Z"
+            if fetch_electricity:
+                url_prices = (
+                    "https://api.anwb.nl/energy/energy-services/v2/tarieven/electricity"
+                    f"?startDate={day_start}&endDate={day_end}&interval=HOUR"
+                )
+                price_tasks.append(self._async_fetch_data(url_prices, self._kraken_token))
+
+            if fetch_gas:
+                url_gas_prices = (
+                    "https://api.anwb.nl/energy/energy-services/v2/tarieven/gas"
+                    f"?startDate={day_start}&endDate={day_end}&interval=HOUR"
+                )
+                gas_price_tasks.append(self._async_fetch_data(url_gas_prices, self._kraken_token))
+
+        try:
+            if price_tasks:
+                prices_results = await asyncio.gather(*price_tasks)
+                for res_prices in prices_results:
+                    if res_prices.get("data"):
+                        for p in res_prices["data"]:
+                            dt_str = p.get("date", "").replace("+00:00", ".000Z")
+                            vals = p.get("values", {})
+                            price_map[dt_str] = vals.get("allInPrijs", 0.0)
+        except UpdateFailed as err:
+            if "Kraken token expired" in str(err):
+                raise
+            pass
+
+        try:
+            if gas_price_tasks:
+                gas_prices_results = await asyncio.gather(*gas_price_tasks)
+                for res_prices in gas_prices_results:
+                    if res_prices.get("data"):
+                        for p in res_prices["data"]:
+                            dt_str = p.get("date", "").replace("+00:00", ".000Z")
+                            vals = p.get("values", {})
+                            gas_price_map[dt_str] = vals.get("allInPrijs", 0.0)
+        except UpdateFailed as err:
+            if "Kraken token expired" in str(err):
+                raise
+            pass
+
+        filtered_prices = {
+            k: v
+            for k, v in price_map.items()
+            if k.startswith(today_str) or k.startswith(tomorrow_str)
+        }
+
+        filtered_gas_prices = {
+            k: v
+            for k, v in gas_price_map.items()
+            if k.startswith(today_str) or k.startswith(tomorrow_str)
+        }
+
+        return {
+            "account_number": self._account_number,
+            "account_address": self._account_address,
+            "prices_today": filtered_prices,
+            "gas_prices_today": filtered_gas_prices,
+            "_raw_price_map": price_map,
+            "_raw_gas_price_map": gas_price_map,
+        }
+
+
+class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
+    """Class to manage fetching ANWB Energie Account consumption data."""
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        auth: AsyncConfigEntryAuth,
+        config_entry: ConfigEntry,
+    ) -> None:
+        super().__init__(
+            hass,
+            _LOGGER,
+            name=f"{DOMAIN}_consumption",
+            update_interval=timedelta(hours=6),
+            auth=auth,
+            config_entry=config_entry,
+        )
+
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from ANWB API."""
         try:
@@ -172,7 +333,6 @@ class ANWBDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise
 
     async def _async_update_data_internal(self) -> dict[str, Any]:
-        """Internal method to fetch data from ANWB API."""
         if not self._kraken_token:
             self._kraken_token = await self._async_get_kraken_token()
 
@@ -279,33 +439,6 @@ class ANWBDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if "Kraken token expired" in str(err):
                 raise
             pass
-
-        # Determine current price
-        current_price = None
-        current_hour_str = now.replace(minute=0, second=0, microsecond=0).strftime(
-            "%Y-%m-%dT%H:00:00.000Z"
-        )
-        if current_hour_str in price_map:
-            # Price in the map is in cents, convert to Euro
-            current_price = price_map[current_hour_str] / 100.0
-
-        today_str = now.strftime("%Y-%m-%d")
-        tomorrow_str = (now + timedelta(days=1)).strftime("%Y-%m-%d")
-        filtered_prices = {
-            k: v
-            for k, v in price_map.items()
-            if k.startswith(today_str) or k.startswith(tomorrow_str)
-        }
-
-        current_gas_price = None
-        if current_hour_str in gas_price_map:
-            current_gas_price = gas_price_map[current_hour_str] / 100.0
-
-        filtered_gas_prices = {
-            k: v
-            for k, v in gas_price_map.items()
-            if k.startswith(today_str) or k.startswith(tomorrow_str)
-        }
 
         import_usage = 0.0
         import_cost = 0.0
@@ -440,10 +573,6 @@ class ANWBDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "total_cost": total_cost,
             "total_cost_gas": total_cost_gas,
             "account_number": self._account_number,
-            "current_price": current_price,
-            "prices_today": filtered_prices,
-            "current_gas_price": current_gas_price,
-            "gas_prices_today": filtered_gas_prices,
             "account_address": getattr(self, "_account_address", None),
         }
 
@@ -548,3 +677,12 @@ class ANWBDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     unit_of_measurement=unit,
                 )
                 async_add_external_statistics(self.hass, metadata, statistics)
+
+@dataclass
+class ANWBEnergieAccountData:
+    """Data for the ANWB Energie Account integration."""
+
+    consumption: ANWBConsumptionCoordinator
+    pricing: ANWBPricingCoordinator
+
+type ANWBEnergieAccountConfigEntry = ConfigEntry[ANWBEnergieAccountData]

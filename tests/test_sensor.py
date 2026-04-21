@@ -11,6 +11,7 @@ sys.modules["homeassistant.config_entries"] = MagicMock()
 sys.modules["homeassistant.components"] = MagicMock()
 sys.modules["homeassistant.components.application_credentials"] = MagicMock()
 sys.modules["homeassistant.helpers"] = MagicMock()
+sys.modules["homeassistant.helpers.event"] = MagicMock()
 sys.modules["homeassistant.helpers.aiohttp_client"] = MagicMock()
 sys.modules["homeassistant.helpers.config_entry_oauth2_flow"] = MagicMock()
 sys.modules["homeassistant.util"] = MagicMock()
@@ -55,6 +56,13 @@ sys.modules["homeassistant.helpers.device_registry"] = MagicMock()
 sys.modules["homeassistant.helpers.entity_platform"] = MagicMock()
 
 sys.modules["homeassistant.helpers.update_coordinator"] = MagicMock()
+class DataUpdateCoordinatorMeta(type):
+    def __getitem__(cls, val):
+        return cls
+class DataUpdateCoordinator(metaclass=DataUpdateCoordinatorMeta):
+    def __init__(self, *args, **kwargs):
+        self.data = None
+sys.modules["homeassistant.helpers.update_coordinator"].DataUpdateCoordinator = DataUpdateCoordinator
 class CoordinatorEntityMeta(type):
     def __getitem__(cls, val):
         return cls
@@ -89,31 +97,42 @@ def test_sensor_types():
     assert "total_cost_gas" in keys
     assert "current_gas_price" in keys
 
+import datetime
+
 def test_sensor_native_value():
     """Test sensor value formatting."""
     # Setup mock coordinator
     coordinator = MagicMock()
+    mock_now = datetime.datetime(2026, 4, 20, 0, 30, 0, tzinfo=datetime.timezone.utc)
+    
     coordinator.data = {
         "account_number": "12345",
-        "current_price": 0.25432,
-        "current_gas_price": 1.25432,
+        "prices_today": {
+            "2026-04-20T00:00:00.000Z": 25.432,
+        },
+        "gas_prices_today": {
+            "2026-04-20T00:00:00.000Z": 125.432,
+        },
         "gas_usage": 12.345
     }
     
-    # Test current_price
-    desc = next(d for d in SENSOR_TYPES if d.key == "current_price")
-    sensor = ANWBEnergieAccountSensor(coordinator, desc)
-    assert sensor.native_value == 0.2543
+    from unittest.mock import patch
+    import custom_components.anwb_energie_account.sensor as sensor_mod
+    with patch.object(sensor_mod.dt_util, "utcnow", return_value=mock_now):
+        # Test current_price
+        desc = next(d for d in SENSOR_TYPES if d.key == "current_price")
+        sensor = ANWBEnergieAccountSensor(coordinator, desc)
+        assert sensor.native_value == 0.2543
 
-    # Test current_gas_price
-    desc = next(d for d in SENSOR_TYPES if d.key == "current_gas_price")
-    sensor = ANWBEnergieAccountSensor(coordinator, desc)
-    assert sensor.native_value == 1.2543
+        # Test current_gas_price
+        desc = next(d for d in SENSOR_TYPES if d.key == "current_gas_price")
+        sensor = ANWBEnergieAccountSensor(coordinator, desc)
+        assert sensor.native_value == 1.2543
 
-    # Test normal value
-    desc = next(d for d in SENSOR_TYPES if d.key == "gas_usage")
-    sensor = ANWBEnergieAccountSensor(coordinator, desc)
-    assert sensor.native_value == 12.35
+        # Test normal value
+        desc = next(d for d in SENSOR_TYPES if d.key == "gas_usage")
+        sensor = ANWBEnergieAccountSensor(coordinator, desc)
+        assert sensor.native_value == 12.35
 
 def test_sensor_extra_attributes():
     """Test sensor extra state attributes formatting."""

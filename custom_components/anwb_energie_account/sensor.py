@@ -11,13 +11,15 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.const import CURRENCY_EURO, UnitOfEnergy, UnitOfVolume
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.helpers.event import async_track_time_change
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
-from .coordinator import ANWBDataUpdateCoordinator, ANWBEnergieAccountConfigEntry
+from .coordinator import ANWBBaseCoordinator, ANWBEnergieAccountConfigEntry
 
 SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
     SensorEntityDescription(
@@ -132,24 +134,26 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up ANWB Energie Account sensors based on a config entry."""
-    coordinator = entry.runtime_data
+    data = entry.runtime_data
 
-    async_add_entities(
-        ANWBEnergieAccountSensor(coordinator, description)
-        for description in SENSOR_TYPES
-    )
+    entities = []
+    for description in SENSOR_TYPES:
+        if description.key in ("current_price", "current_gas_price"):
+            entities.append(ANWBEnergieAccountSensor(data.pricing, description))
+        else:
+            entities.append(ANWBEnergieAccountSensor(data.consumption, description))
+
+    async_add_entities(entities)
 
 
-class ANWBEnergieAccountSensor(
-    CoordinatorEntity[ANWBDataUpdateCoordinator], SensorEntity
-):
+class ANWBEnergieAccountSensor(CoordinatorEntity[ANWBBaseCoordinator], SensorEntity):
     """Representation of an ANWB Energie Account sensor."""
 
     _attr_has_entity_name = True
 
     def __init__(
         self,
-        coordinator: ANWBDataUpdateCoordinator,
+        coordinator: ANWBBaseCoordinator,
         description: SensorEntityDescription,
     ) -> None:
         """Initialize the sensor."""
@@ -166,23 +170,54 @@ class ANWBEnergieAccountSensor(
             configuration_url="https://mijn.anwb.nl/energie",
         )
         if account_address:
-            # We can use the city name as the suggested area or just pass it to the name.
-            # But DeviceInfo only accepts suggested_area.
-            # Let's set the full address as configuration_url or something, or simply set it
-            # in the model.
             self._attr_device_info["model"] = f"Energie Account ({account_address})"
+
+    async def async_added_to_hass(self) -> None:
+        """Run when entity about to be added."""
+        await super().async_added_to_hass()
+
+        if self.entity_description.key in ("current_price", "current_gas_price"):
+            # Trigger a state update exactly on the hour (XX:00:00)
+            self.async_on_remove(
+                async_track_time_change(
+                    self.hass, self._handle_hourly_update, minute=0, second=0
+                )
+            )
+
+    @callback
+    def _handle_hourly_update(self, now: datetime) -> None:
+        """Update the state of the sensor from cached data."""
+        self.async_write_ha_state()
 
     @property
     def native_value(self) -> float | None:
         """Return the state of the sensor."""
         if self.coordinator.data is None:
             return None
+
+        if self.entity_description.key == "current_price":
+            now = dt_util.utcnow()
+            current_hour_str = now.replace(minute=0, second=0, microsecond=0).strftime(
+                "%Y-%m-%dT%H:00:00.000Z"
+            )
+            prices = self.coordinator.data.get("prices_today", {})
+            if current_hour_str in prices:
+                return round(prices[current_hour_str] / 100.0, 4)
+            return None
+
+        if self.entity_description.key == "current_gas_price":
+            now = dt_util.utcnow()
+            current_hour_str = now.replace(minute=0, second=0, microsecond=0).strftime(
+                "%Y-%m-%dT%H:00:00.000Z"
+            )
+            prices = self.coordinator.data.get("gas_prices_today", {})
+            if current_hour_str in prices:
+                return round(prices[current_hour_str] / 100.0, 4)
+            return None
+
         val = self.coordinator.data.get(self.entity_description.key)
         if val is None:
             return None
-        # Provide more precision for current_price
-        if self.entity_description.key in ("current_price", "current_gas_price"):
-            return round(val, 4)
         return round(val, 2)
 
     @property
