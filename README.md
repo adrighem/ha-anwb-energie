@@ -14,6 +14,87 @@ A custom component for Home Assistant that natively integrates your ANWB Energie
 *   **Diagnostics Support:** Download redacted diagnostics natively from the UI to easily share bug reports.
 *   **Official Translation Support:** Fully supports English and Dutch seamlessly through Home Assistant's translation engine.
 
+## Example Dashboards
+
+Using the popular [ApexCharts Card](https://github.com/RomRider/apexcharts-card), you can create beautiful graphs that color-code the current electricity and gas prices.
+
+![Electricity Prices](docs/electricity_prices.png)
+![Gas Prices](docs/gas_prices.png)
+
+### Electricity Prices
+```yaml
+type: custom:apexcharts-card
+header:
+  show: true
+  title: Electricity Prices Today
+  show_states: true
+  colorize_states: true
+graph_span: 24h
+span:
+  start: day
+now:
+  show: true
+  label: Now
+series:
+  - entity: sensor.anwb_account_a_75cabfb0_huidige_elektriciteitsprijs
+    type: column
+    data_generator: |
+      return entity.attributes.prices.map((record) => {
+        return [new Date(record.start_time).getTime(), record.price];
+      });
+    color_threshold:
+      - value: -1
+        color: '#4CAF50'
+      - value: 0
+        color: '#8BC34A'
+      - value: 0.15
+        color: '#FFC107'
+      - value: 0.25
+        color: '#FF9800'
+      - value: 0.35
+        color: '#F44336'
+      - value: 0.5
+        color: '#E91E63'
+```
+
+### Gas Prices
+```yaml
+type: custom:apexcharts-card
+experimental:
+  color_threshold: true
+header:
+  show: true
+  title: Gas Prices Today
+  show_states: true
+  colorize_states: true
+graph_span: 24h
+span:
+  start: day
+now:
+  show: true
+  label: Now
+series:
+  - entity: sensor.anwb_account_a_75cabfb0_huidige_gasprijs
+    type: column
+    data_generator: |
+      return entity.attributes.prices.map((record) => {
+        return [new Date(record.start_time).getTime(), record.price];
+      });
+    color_threshold:
+      - value: 0
+        color: '#4CAF50'
+      - value: 1
+        color: '#8BC34A'
+      - value: 1.2
+        color: '#FFC107'
+      - value: 1.4
+        color: '#FF9800'
+      - value: 1.6
+        color: '#F44336'
+      - value: 1.8
+        color: '#E91E63'
+```
+
 ## Installation
 
 ### HACS (Recommended)
