@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0](https://github.com/adrighem/ha-anwb-energie/compare/v0.9.1...v1.0.0) (2026-04-21)
+
+
+### Features
+
+* split coordinators and optimize price fetching ([da798b4](https://github.com/adrighem/ha-anwb-energie/commit/da798b4606b63f121a963edae07d473f3b67d6f7))
+
+
+### Bug Fixes
+
+* correctly format and sort manifest.json keys for hassfest validation ([5e851c1](https://github.com/adrighem/ha-anwb-energie/commit/5e851c16c95677f92b067c9806f335f12036daf9))
+* update manifest with documentation URL and issue tracker for validation ([de238e8](https://github.com/adrighem/ha-anwb-energie/commit/de238e83065e8a7bf682ff4fcd94535673165bc8))
+
 ## [0.9.1](https://github.com/adrighem/ha-anwb-energie/compare/v0.9.0...v0.9.1) (2026-04-20)
 
 
