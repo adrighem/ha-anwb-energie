@@ -10,12 +10,12 @@
     "recorder"
   ],
   "documentation": "https://github.com/adrighem/ha-anwb-energie",
-  "issue_tracker": "https://github.com/adrighem/ha-anwb-energie/issues",
   "homekit": {},
   "integration_type": "service",
   "iot_class": "cloud_polling",
-  "version": "0.9.1",
+  "issue_tracker": "https://github.com/adrighem/ha-anwb-energie/issues",
   "requirements": [],
   "ssdp": [],
+  "version": "0.9.1",
   "zeroconf": []
 }
