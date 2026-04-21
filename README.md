@@ -38,7 +38,7 @@ now:
   show: true
   label: Now
 series:
-  - entity: sensor.anwb_account_a_75cabfb0_huidige_elektriciteitsprijs
+  - entity: sensor.anwb_account_a_xxxxxxxx_huidige_elektriciteitsprijs
     type: column
     data_generator: |
       return entity.attributes.prices.map((record) => {
@@ -76,7 +76,7 @@ now:
   show: true
   label: Now
 series:
-  - entity: sensor.anwb_account_a_75cabfb0_huidige_gasprijs
+  - entity: sensor.anwb_account_a_xxxxxxxx_huidige_gasprijs
     type: column
     data_generator: |
       return entity.attributes.prices.map((record) => {
