@@ -190,11 +190,21 @@ class ANWBPricingCoordinator(ANWBBaseCoordinator):
     async def _async_update_data(self) -> dict[str, Any]:
         try:
             return await self._async_update_data_internal()
-        except UpdateFailed as err:
-            if "Kraken token expired" in str(err):
+        except Exception as err:
+            if isinstance(err, UpdateFailed) and "Kraken token expired" in str(err):
                 _LOGGER.debug("Kraken token expired, refreshing and retrying")
                 self._kraken_token = None
-                return await self._async_update_data_internal()
+                try:
+                    return await self._async_update_data_internal()
+                except Exception as retry_err:
+                    if self.data is not None:
+                        _LOGGER.warning("Update failed after token refresh, using cached data: %s", retry_err)
+                        return self.data
+                    raise
+
+            if self.data is not None:
+                _LOGGER.warning("Update failed, using cached data: %s", err)
+                return self.data
             raise
 
     async def _async_update_data_internal(self) -> dict[str, Any]:
@@ -344,11 +354,21 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
         """Fetch data from ANWB API."""
         try:
             return await self._async_update_data_internal()
-        except UpdateFailed as err:
-            if "Kraken token expired" in str(err):
+        except Exception as err:
+            if isinstance(err, UpdateFailed) and "Kraken token expired" in str(err):
                 _LOGGER.debug("Kraken token expired, refreshing and retrying")
                 self._kraken_token = None
-                return await self._async_update_data_internal()
+                try:
+                    return await self._async_update_data_internal()
+                except Exception as retry_err:
+                    if self.data is not None:
+                        _LOGGER.warning("Update failed after token refresh, using cached data: %s", retry_err)
+                        return self.data
+                    raise
+
+            if self.data is not None:
+                _LOGGER.warning("Update failed, using cached data: %s", err)
+                return self.data
             raise
 
     async def _async_update_data_internal(self) -> dict[str, Any]:
