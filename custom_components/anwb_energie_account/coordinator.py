@@ -43,6 +43,7 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+
 class ANWBBaseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Base coordinator to manage ANWB token and account."""
 
@@ -118,7 +119,9 @@ class ANWBBaseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 GRAPHQL_URL, json={"query": query, "variables": {}}, headers=headers
             ) as resp:
                 if resp.status in (401, 403):
-                    raise UpdateFailed("Kraken token expired or invalid fetching account number")
+                    raise UpdateFailed(
+                        "Kraken token expired or invalid fetching account number"
+                    )
                 resp.raise_for_status()
                 data = await resp.json()
                 accounts = data.get("data", {}).get("viewer", {}).get("accounts", [])
@@ -139,7 +142,9 @@ class ANWBBaseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 return {"number": number, "address": address}
         except ClientError as err:
             if getattr(err, "status", None) in (401, 403):
-                raise UpdateFailed("Kraken token expired or invalid fetching account number") from err
+                raise UpdateFailed(
+                    "Kraken token expired or invalid fetching account number"
+                ) from err
             raise UpdateFailed(f"Failed to fetch account number: {err}") from err
 
     async def _async_fetch_data(self, url: str, kraken_token: str) -> dict[str, Any]:
@@ -149,14 +154,18 @@ class ANWBBaseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         try:
             async with session.get(url, headers=headers) as resp:
                 if resp.status in (401, 403):
-                    raise UpdateFailed(f"Kraken token expired or invalid fetching data from {url}")
+                    raise UpdateFailed(
+                        f"Kraken token expired or invalid fetching data from {url}"
+                    )
                 if resp.status == 404:
                     return {}
                 resp.raise_for_status()
                 return await resp.json()
         except ClientError as err:
             if getattr(err, "status", None) in (401, 403):
-                raise UpdateFailed(f"Kraken token expired or invalid fetching data from {url}") from err
+                raise UpdateFailed(
+                    f"Kraken token expired or invalid fetching data from {url}"
+                ) from err
             raise UpdateFailed(f"Error fetching data from {url}: {err}") from err
 
 
@@ -198,7 +207,9 @@ class ANWBPricingCoordinator(ANWBBaseCoordinator):
             self._account_address = info["address"]
 
         now = dt_util.utcnow()
-        current_hour_str = now.replace(minute=0, second=0, microsecond=0).strftime("%Y-%m-%dT%H:00:00.000Z")
+        now.replace(minute=0, second=0, microsecond=0).strftime(
+            "%Y-%m-%dT%H:00:00.000Z"
+        )
         today_str = now.strftime("%Y-%m-%d")
         tomorrow = now + timedelta(days=1)
         tomorrow_str = tomorrow.strftime("%Y-%m-%d")
@@ -228,8 +239,12 @@ class ANWBPricingCoordinator(ANWBBaseCoordinator):
         if not fetch_electricity and not fetch_gas and self.data:
             return dict(self.data)
 
-        price_map: dict[str, float] = dict(self.data.get("_raw_price_map", {})) if self.data else {}
-        gas_price_map: dict[str, float] = dict(self.data.get("_raw_gas_price_map", {})) if self.data else {}
+        price_map: dict[str, float] = (
+            dict(self.data.get("_raw_price_map", {})) if self.data else {}
+        )
+        gas_price_map: dict[str, float] = (
+            dict(self.data.get("_raw_gas_price_map", {})) if self.data else {}
+        )
 
         price_tasks = []
         gas_price_tasks = []
@@ -244,14 +259,18 @@ class ANWBPricingCoordinator(ANWBBaseCoordinator):
                     "https://api.anwb.nl/energy/energy-services/v2/tarieven/electricity"
                     f"?startDate={day_start}&endDate={day_end}&interval=HOUR"
                 )
-                price_tasks.append(self._async_fetch_data(url_prices, self._kraken_token))
+                price_tasks.append(
+                    self._async_fetch_data(url_prices, self._kraken_token)
+                )
 
             if fetch_gas:
                 url_gas_prices = (
                     "https://api.anwb.nl/energy/energy-services/v2/tarieven/gas"
                     f"?startDate={day_start}&endDate={day_end}&interval=HOUR"
                 )
-                gas_price_tasks.append(self._async_fetch_data(url_gas_prices, self._kraken_token))
+                gas_price_tasks.append(
+                    self._async_fetch_data(url_gas_prices, self._kraken_token)
+                )
 
         try:
             if price_tasks:
@@ -384,7 +403,14 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
             f"&contractStartDate={c_start}&interval=MONTH"
         )
 
-        res_import, res_export, res_imp_month, res_exp_month, res_import_gas, res_import_gas_month = await asyncio.gather(
+        (
+            res_import,
+            res_export,
+            res_imp_month,
+            res_exp_month,
+            res_import_gas,
+            res_import_gas_month,
+        ) = await asyncio.gather(
             self._async_fetch_data(url_import, self._kraken_token),
             self._async_fetch_data(url_export, self._kraken_token),
             self._async_fetch_data(url_import_month, self._kraken_token),
@@ -407,12 +433,14 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
                 f"?startDate={day_start}&endDate={day_end}&interval=HOUR"
             )
             price_tasks.append(self._async_fetch_data(url_prices, self._kraken_token))
-            
+
             url_gas_prices = (
                 "https://api.anwb.nl/energy/energy-services/v2/tarieven/gas"
                 f"?startDate={day_start}&endDate={day_end}&interval=HOUR"
             )
-            gas_price_tasks.append(self._async_fetch_data(url_gas_prices, self._kraken_token))
+            gas_price_tasks.append(
+                self._async_fetch_data(url_gas_prices, self._kraken_token)
+            )
 
         try:
             prices_results = await asyncio.gather(*price_tasks)
@@ -456,7 +484,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
 
             for d in res_import["data"]:
                 usage = d.get("usage", 0.0)
-                timestamp = d.get("startDate")
+                timestamp = d.get("startDate", "").replace("+00:00", ".000Z")
                 price_cents = price_map.get(timestamp, 0.0)
 
                 import_usage += usage
@@ -467,7 +495,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
         if res_export.get("data"):
             for d in res_export["data"]:
                 usage = d.get("usage", 0.0)
-                timestamp = d.get("startDate")
+                timestamp = d.get("startDate", "").replace("+00:00", ".000Z")
                 price_cents = price_map.get(timestamp, 0.0)
 
                 export_usage += usage
@@ -496,7 +524,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
 
             for d in res_import_gas["data"]:
                 usage = d.get("usage", 0.0)
-                timestamp = d.get("startDate")
+                timestamp = d.get("startDate", "").replace("+00:00", ".000Z")
                 price_cents = gas_price_map.get(timestamp, 0.0)
 
                 gas_usage += usage
@@ -528,7 +556,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
                 + (NETBEHEERKOSTEN * fraction)
                 + (VERMINDERING_ENERGIEBELASTING * fraction)
             )
-            
+
         if abs(api_vaste_kosten_gas) > 0.01:
             total_fixed_costs_gas = api_vaste_kosten_gas
         else:
@@ -541,8 +569,14 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
 
             days_with_data_gas = now.day
             if latest_ts_gas:
-                days_with_data_gas = datetime.strptime(latest_ts_gas[:10], "%Y-%m-%d").day
-                
+                parsed_dt_gas = dt_util.parse_datetime(latest_ts_gas)
+                if parsed_dt_gas:
+                    days_with_data_gas = dt_util.as_local(parsed_dt_gas).day
+                else:
+                    days_with_data_gas = datetime.strptime(
+                        latest_ts_gas[:10], "%Y-%m-%d"
+                    ).day
+
             fraction_gas = days_with_data_gas / float(last_day)
             total_fixed_costs_gas = (
                 (VASTE_LEVERINGSKOSTEN_GAS * fraction_gas)
@@ -554,8 +588,11 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
         total_cost_gas = gas_cost + total_fixed_costs_gas
 
         await self._insert_statistics(
-            res_import.get("data", []), res_export.get("data", []), price_map,
-            res_import_gas.get("data", []), gas_price_map
+            res_import.get("data", []),
+            res_export.get("data", []),
+            price_map,
+            res_import_gas.get("data", []),
+            gas_price_map,
         )
 
         return {
@@ -577,8 +614,12 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
         }
 
     async def _insert_statistics(
-        self, import_data: list, export_data: list, price_map: dict,
-        gas_data: list, gas_price_map: dict
+        self,
+        import_data: list,
+        export_data: list,
+        price_map: dict,
+        gas_data: list,
+        gas_price_map: dict,
     ) -> None:
         """Insert ANWB statistics."""
         for sensor_type, is_production, is_cost, data_list, p_map in [
@@ -592,8 +633,24 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
             if not data_list:
                 continue
 
-            unit_class = None if is_cost else ("energy" if "import" in sensor_type or "export" in sensor_type else "volume")
-            unit = CURRENCY_EURO if is_cost else (UnitOfEnergy.KILO_WATT_HOUR if "import" in sensor_type or "export" in sensor_type else UnitOfVolume.CUBIC_METERS)
+            unit_class = (
+                None
+                if is_cost
+                else (
+                    "energy"
+                    if "import" in sensor_type or "export" in sensor_type
+                    else "volume"
+                )
+            )
+            unit = (
+                CURRENCY_EURO
+                if is_cost
+                else (
+                    UnitOfEnergy.KILO_WATT_HOUR
+                    if "import" in sensor_type or "export" in sensor_type
+                    else UnitOfVolume.CUBIC_METERS
+                )
+            )
             statistic_id = (
                 f"{DOMAIN}:{sensor_type}_{self._account_number}".lower().replace(
                     "-", "_"
@@ -649,7 +706,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
 
                 usage = data.get("usage", 0.0)
                 if is_cost:
-                    timestamp = data.get("startDate")
+                    timestamp = data.get("startDate", "").replace("+00:00", ".000Z")
                     price_cents = p_map.get(timestamp, 0.0)
                     val = (usage * price_cents) / 100.0
                 else:
@@ -678,11 +735,13 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
                 )
                 async_add_external_statistics(self.hass, metadata, statistics)
 
+
 @dataclass
 class ANWBEnergieAccountData:
     """Data for the ANWB Energie Account integration."""
 
     consumption: ANWBConsumptionCoordinator
     pricing: ANWBPricingCoordinator
+
 
 type ANWBEnergieAccountConfigEntry = ConfigEntry[ANWBEnergieAccountData]

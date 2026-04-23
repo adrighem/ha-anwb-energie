@@ -1,3 +1,4 @@
+# ruff: noqa: E402, E501
 """Test the ANWB Energie Account config flow without requiring a full Home Assistant installation."""
 
 import sys
@@ -17,38 +18,47 @@ sys.modules["homeassistant.components.application_credentials"] = MagicMock()
 sys.modules["homeassistant.helpers"] = MagicMock()
 sys.modules["homeassistant.helpers.aiohttp_client"] = MagicMock()
 sys.modules["homeassistant.helpers.config_entry_oauth2_flow"] = MagicMock()
+
+
 class DataUpdateCoordinatorMeta(type):
     def __getitem__(cls, val):
         return cls
+
 
 class DataUpdateCoordinator(metaclass=DataUpdateCoordinatorMeta):
     def __init__(self, *args, **kwargs):
         self.data = None
 
+
 sys.modules["homeassistant.helpers.update_coordinator"] = MagicMock()
-sys.modules["homeassistant.helpers.update_coordinator"].DataUpdateCoordinator = DataUpdateCoordinator
+sys.modules[
+    "homeassistant.helpers.update_coordinator"
+].DataUpdateCoordinator = DataUpdateCoordinator
 sys.modules["homeassistant.util"] = MagicMock()
 sys.modules["homeassistant.components.recorder"] = MagicMock()
 sys.modules["homeassistant.components.recorder.models"] = MagicMock()
 sys.modules["homeassistant.components.recorder.statistics"] = MagicMock()
+
 
 # Create dummy classes to inject into the mocked modules
 class ConfigFlow:
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__()
 
+
 sys.modules["homeassistant.config_entries"].ConfigFlow = ConfigFlow
 
 # Now we can import the config flow safely
-from custom_components.anwb_energie_account.config_flow import ANWBConfigFlow
-from custom_components.anwb_energie_account.const import DOMAIN, OAUTH2_TOKEN
+from custom_components.anwb_energie_account.config_flow import ANWBConfigFlow  # noqa: E402
+from custom_components.anwb_energie_account.const import DOMAIN  # noqa: E402
+
 
 # Mock classes to simulate HA behavior
 class MockConfigFlowBase:
     def __init__(self):
         self.context = {}
         self.hass = MagicMock()
-    
+
     async def async_set_unique_id(self, unique_id):
         pass
 
@@ -68,8 +78,10 @@ class MockConfigFlowBase:
     def async_update_reload_and_abort(self, entry, data):
         return {"type": "abort", "reason": "reauth_successful", "data": data}
 
+
 # Monkeypatch the base class since we mocked it during import
 ANWBConfigFlow.__bases__ = (MockConfigFlowBase,)
+
 
 @pytest.fixture
 def flow():
@@ -77,10 +89,14 @@ def flow():
     f.hass = MagicMock()
     return f
 
+
 @pytest.mark.asyncio
 async def test_full_flow(flow):
     """Check full flow."""
-    with patch("custom_components.anwb_energie_account.config_flow.async_import_client_credential", new_callable=AsyncMock):
+    with patch(
+        "custom_components.anwb_energie_account.config_flow.async_import_client_credential",
+        new_callable=AsyncMock,
+    ):
         result = await flow.async_step_user()
 
     assert result["type"] == "form"
@@ -107,11 +123,17 @@ async def test_full_flow(flow):
     mock_session = MagicMock()
     mock_session.post.return_value = mock_post_context
 
-    with patch("custom_components.anwb_energie_account.config_flow.async_get_clientsession", return_value=mock_session), \
-         patch("custom_components.anwb_energie_account.config_flow.async_import_client_credential", new_callable=AsyncMock):
-        
+    with patch(
+        "custom_components.anwb_energie_account.config_flow.async_get_clientsession",
+        return_value=mock_session,
+    ), patch(
+        "custom_components.anwb_energie_account.config_flow.async_import_client_credential",
+        new_callable=AsyncMock,
+    ):
         result = await flow.async_step_user(
-            {"auth_code_url": "https://login.anwb.nl/49acae90-1d8b-46a5-943a-33da44624219/login/callback?code=abcd&state=1234"}
+            {
+                "auth_code_url": "https://login.anwb.nl/49acae90-1d8b-46a5-943a-33da44624219/login/callback?code=abcd&state=1234"
+            }
         )
 
     assert result["type"] == "create_entry"
@@ -150,9 +172,14 @@ async def test_reauth_flow(flow):
     mock_session = MagicMock()
     mock_session.post.return_value = mock_post_context
 
-    with patch("custom_components.anwb_energie_account.config_flow.async_get_clientsession", return_value=mock_session):
+    with patch(
+        "custom_components.anwb_energie_account.config_flow.async_get_clientsession",
+        return_value=mock_session,
+    ):
         result = await flow.async_step_reauth_confirm(
-            {"auth_code_url": "https://login.anwb.nl/49acae90-1d8b-46a5-943a-33da44624219/login/callback?code=newcode"}
+            {
+                "auth_code_url": "https://login.anwb.nl/49acae90-1d8b-46a5-943a-33da44624219/login/callback?code=newcode"
+            }
         )
 
     assert result["type"] == "abort"

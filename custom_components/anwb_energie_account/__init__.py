@@ -20,7 +20,12 @@ from homeassistant.helpers.config_entry_oauth2_flow import (
 
 from . import api
 from .const import CLIENT_ID, DOMAIN
-from .coordinator import ANWBConsumptionCoordinator, ANWBPricingCoordinator, ANWBEnergieAccountConfigEntry, ANWBEnergieAccountData
+from .coordinator import (
+    ANWBConsumptionCoordinator,
+    ANWBPricingCoordinator,
+    ANWBEnergieAccountConfigEntry,
+    ANWBEnergieAccountData,
+)
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
 
@@ -60,13 +65,12 @@ async def async_setup_entry(
 
     consumption_coordinator = ANWBConsumptionCoordinator(hass, auth, entry)
     pricing_coordinator = ANWBPricingCoordinator(hass, auth, entry)
-    
+
     await consumption_coordinator.async_config_entry_first_refresh()
     await pricing_coordinator.async_config_entry_first_refresh()
 
     entry.runtime_data = ANWBEnergieAccountData(
-        consumption=consumption_coordinator,
-        pricing=pricing_coordinator
+        consumption=consumption_coordinator, pricing=pricing_coordinator
     )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

@@ -8,7 +8,7 @@ from homeassistant.helpers import config_entry_oauth2_flow
 
 
 class AsyncConfigEntryAuth:
-    """Provide ANWB Energie Account authentication tied to an OAuth2 based config entry."""
+    """Provide ANWB Energie Account authentication tied to an OAuth2 config entry."""
 
     def __init__(
         self,
