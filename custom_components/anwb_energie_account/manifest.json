@@ -16,6 +16,6 @@
   "issue_tracker": "https://github.com/adrighem/ha-anwb-energie/issues",
   "requirements": [],
   "ssdp": [],
-  "version": "1.0.0",
+  "version": "1.0.1",
   "zeroconf": []
 }

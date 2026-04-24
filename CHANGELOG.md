@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.1](https://github.com/adrighem/ha-anwb-energie/compare/v1.0.0...v1.0.1) (2026-04-24)
+
+
+### Bug Fixes
+
+* correct timezone parsing and format standardization for API timestamps ([29bae66](https://github.com/adrighem/ha-anwb-energie/commit/29bae6675753c913ed959c72f87631ad735521f6))
+* remove hardcoded release version from release-please config ([ea31a0f](https://github.com/adrighem/ha-anwb-energie/commit/ea31a0f381705cea5529c5987067e1645d471063))
+* remove hardcoded release version from release-please config ([97b60fb](https://github.com/adrighem/ha-anwb-energie/commit/97b60fbdf595220d0f44e0f8998029da9446ace1))
+
 ## [1.0.0](https://github.com/adrighem/ha-anwb-energie/compare/v0.9.1...v1.0.0) (2026-04-21)
 
 
