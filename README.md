@@ -97,6 +97,39 @@ series:
         color: '#E91E63'
 ```
 
+### Historic Usage (Yesterday)
+```yaml
+type: custom:apexcharts-card
+header:
+  show: true
+  title: Historic Usage (Yesterday)
+graph_span: 24h
+span:
+  start: day
+  offset: -1d
+stacked: true
+yaxis:
+  - decimals: 2
+series:
+  - entity: sensor.anwb_account_a_xxxxxxxx_maandelijks_importverbruik
+    name: Import
+    type: column
+    color: '#3498db'
+    data_generator: |
+      const stats = await hass.callWS({ type: 'recorder/statistics_during_period', start_time: start.toISOString(), end_time: end.toISOString(), statistic_ids: ['anwb_energie_account:import_usage_a_xxxxxxxx'], period: 'hour' });
+      const data = stats['anwb_energie_account:import_usage_a_xxxxxxxx'] || [];
+      return data.map(s => [s.start, s.state]);
+  - entity: sensor.anwb_account_a_xxxxxxxx_maandelijks_exportverbruik
+    name: Export
+    type: column
+    color: '#f1c40f'
+    invert: true
+    data_generator: |
+      const stats = await hass.callWS({ type: 'recorder/statistics_during_period', start_time: start.toISOString(), end_time: end.toISOString(), statistic_ids: ['anwb_energie_account:export_usage_a_xxxxxxxx'], period: 'hour' });
+      const data = stats['anwb_energie_account:export_usage_a_xxxxxxxx'] || [];
+      return data.map(s => [s.start, s.state]);
+```
+
 ## Installation
 
 ### HACS (Recommended)
