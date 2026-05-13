@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.2](https://github.com/adrighem/ha-anwb-energie/compare/v1.0.1...v1.0.2) (2026-05-13)
+
+
+### Bug Fixes
+
+* change electricity price fetch time check to 13:00 UTC and handle gas gracefully ([5148372](https://github.com/adrighem/ha-anwb-energie/commit/51483723a1cb1cb22be8800443fca90550295de2))
+* fallback to cached data when API update fails to prevent unnecessary unavailable state ([c99d194](https://github.com/adrighem/ha-anwb-energie/commit/c99d194c39935b8aa144d3ee3ad12e4f297eec57))
+
 ## [1.0.1](https://github.com/adrighem/ha-anwb-energie/compare/v1.0.0...v1.0.1) (2026-04-24)
 
 
