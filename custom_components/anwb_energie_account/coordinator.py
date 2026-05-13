@@ -239,7 +239,7 @@ class ANWBPricingCoordinator(ANWBBaseCoordinator):
                     has_tomorrow_gas = True
                     break
 
-        fetch_electricity = not has_tomorrow_electricity and now.hour >= 15
+        fetch_electricity = not has_tomorrow_electricity and now.hour >= 13
         fetch_gas = not has_tomorrow_gas and now.hour >= 6
 
         if not self.data:
@@ -423,21 +423,38 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
             f"&contractStartDate={c_start}&interval=MONTH"
         )
 
-        (
-            res_import,
-            res_export,
-            res_imp_month,
-            res_exp_month,
-            res_import_gas,
-            res_import_gas_month,
-        ) = await asyncio.gather(
+        import_tasks = [
             self._async_fetch_data(url_import, self._kraken_token),
             self._async_fetch_data(url_export, self._kraken_token),
             self._async_fetch_data(url_import_month, self._kraken_token),
             self._async_fetch_data(url_export_month, self._kraken_token),
+        ]
+        
+        gas_tasks = [
             self._async_fetch_data(url_import_gas, self._kraken_token),
             self._async_fetch_data(url_import_gas_month, self._kraken_token),
-        )
+        ]
+
+        try:
+            (
+                res_import,
+                res_export,
+                res_imp_month,
+                res_exp_month,
+            ) = await asyncio.gather(*import_tasks)
+        except Exception as e:
+            _LOGGER.error("Failed to fetch electricity data: %s", e)
+            raise UpdateFailed(f"Electricity fetch failed: {e}")
+
+        res_import_gas = {}
+        res_import_gas_month = {}
+        try:
+            (
+                res_import_gas,
+                res_import_gas_month,
+            ) = await asyncio.gather(*gas_tasks)
+        except Exception as e:
+            _LOGGER.warning("Failed to fetch gas data, continuing without gas: %s", e)
 
         price_map: dict[str, float] = {}
         end_day = min(last_day, now.day + 1)
@@ -577,7 +594,9 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
                 + (VERMINDERING_ENERGIEBELASTING * fraction)
             )
 
-        if abs(api_vaste_kosten_gas) > 0.01:
+        if not res_import_gas.get("data"):
+            total_fixed_costs_gas = 0.0
+        elif abs(api_vaste_kosten_gas) > 0.01:
             total_fixed_costs_gas = api_vaste_kosten_gas
         else:
             latest_ts_gas = None
