@@ -69,6 +69,7 @@ class ANWBBaseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._kraken_token: str | None = None
         self._account_number: str | None = None
         self._account_address: str | None = None
+        self.last_successful_update: datetime | None = None
 
     async def _async_get_kraken_token(self) -> str:
         """Get or refresh kraken token."""
@@ -189,13 +190,17 @@ class ANWBPricingCoordinator(ANWBBaseCoordinator):
 
     async def _async_update_data(self) -> dict[str, Any]:
         try:
-            return await self._async_update_data_internal()
+            data = await self._async_update_data_internal()
+            self.last_successful_update = dt_util.utcnow()
+            return data
         except Exception as err:
             if isinstance(err, UpdateFailed) and "Kraken token expired" in str(err):
                 _LOGGER.debug("Kraken token expired, refreshing and retrying")
                 self._kraken_token = None
                 try:
-                    return await self._async_update_data_internal()
+                    data = await self._async_update_data_internal()
+                    self.last_successful_update = dt_util.utcnow()
+                    return data
                 except Exception as retry_err:
                     if self.data is not None:
                         _LOGGER.warning("Update failed after token refresh, using cached data: %s", retry_err)
@@ -353,13 +358,17 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from ANWB API."""
         try:
-            return await self._async_update_data_internal()
+            data = await self._async_update_data_internal()
+            self.last_successful_update = dt_util.utcnow()
+            return data
         except Exception as err:
             if isinstance(err, UpdateFailed) and "Kraken token expired" in str(err):
                 _LOGGER.debug("Kraken token expired, refreshing and retrying")
                 self._kraken_token = None
                 try:
-                    return await self._async_update_data_internal()
+                    data = await self._async_update_data_internal()
+                    self.last_successful_update = dt_util.utcnow()
+                    return data
                 except Exception as retry_err:
                     if self.data is not None:
                         _LOGGER.warning("Update failed after token refresh, using cached data: %s", retry_err)

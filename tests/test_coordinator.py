@@ -59,10 +59,15 @@ class DataUpdateCoordinator(metaclass=DataUpdateCoordinatorMeta):
         self.data = None
 
 
+class UpdateFailed(Exception):
+    pass
+
+
 sys.modules["homeassistant.helpers.update_coordinator"] = MagicMock()
 sys.modules[
     "homeassistant.helpers.update_coordinator"
 ].DataUpdateCoordinator = DataUpdateCoordinator
+sys.modules["homeassistant.helpers.update_coordinator"].UpdateFailed = UpdateFailed
 
 import datetime  # noqa: E402
 from custom_components.anwb_energie_account.coordinator import (  # noqa: E402
@@ -180,3 +185,42 @@ async def test_update_data_with_gas(auth_mock):
         assert result["gas_cost"] == 3.0
 
         assert result["total_cost_gas"] == pytest.approx(3.0 + 3.0)
+
+@pytest.mark.asyncio
+async def test_dns_failure_grace_period(auth_mock):
+    """Test coordinator handles DNS failure with 24h grace period."""
+    hass = MagicMock()
+    config_entry = MagicMock()
+    from homeassistant.helpers.update_coordinator import UpdateFailed
+
+    coordinator = ANWBConsumptionCoordinator(hass, auth_mock, config_entry)
+    coordinator._kraken_token = "mock_kraken_token"
+    coordinator._account_number = "12345"
+
+    import custom_components.anwb_energie_account.coordinator as coord_mod
+    mock_data = {"test": "data"}
+    coordinator.data = mock_data
+    
+    last_success = datetime.datetime(2026, 5, 18, 12, 0, 0, tzinfo=datetime.timezone.utc)
+    coordinator.last_successful_update = last_success
+
+    with patch.object(coordinator, "_async_update_data_internal", side_effect=UpdateFailed("DNS failure")):
+        # 1. Test within 24 hours (e.g. 1 hour later)
+        mock_now = last_success + datetime.timedelta(hours=1)
+        with patch.object(coord_mod.dt_util, "utcnow", return_value=mock_now):
+            result = await coordinator._async_update_data()
+            assert result == mock_data
+            assert coordinator.last_successful_update == last_success
+
+        # 2. Test after 24 hours (e.g. 25 hours later)
+        mock_now = last_success + datetime.timedelta(hours=25)
+        with patch.object(coord_mod.dt_util, "utcnow", return_value=mock_now):
+            with pytest.raises(UpdateFailed):
+                await coordinator._async_update_data()
+
+        # 3. Test regular failure (not DNS) within 24 hours
+        mock_now = last_success + datetime.timedelta(hours=1)
+        with patch.object(coordinator, "_async_update_data_internal", side_effect=UpdateFailed("Some other error")):
+            with patch.object(coord_mod.dt_util, "utcnow", return_value=mock_now):
+                with pytest.raises(UpdateFailed):
+                    await coordinator._async_update_data()

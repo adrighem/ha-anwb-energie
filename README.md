@@ -14,6 +14,18 @@ A custom component for Home Assistant that natively integrates your ANWB Energie
 *   **Diagnostics Support:** Download redacted diagnostics natively from the UI to easily share bug reports.
 *   **Official Translation Support:** Fully supports English and Dutch seamlessly through Home Assistant's translation engine.
 
+## Energy Dashboard Setup
+
+To configure the built-in Home Assistant Energy Dashboard with your ANWB Energie data, navigate to **Settings** -> **Dashboards** -> **Energy** and configure the "Electricity grid" section using these specific sensors:
+
+*   **Grid consumption:** `Yearly import usage` (e.g., `sensor.anwb_account_..._jaarlijks_importverbruik`)
+*   **Return to grid:** `Yearly export usage` (e.g., `sensor.anwb_account_..._jaarlijks_exportverbruik`)
+*   **Track costs:** Select **"Use an entity with current price"** for both import and export, and choose the `Current electricity price` sensor (e.g., `sensor.anwb_account_..._huidige_elektriciteitsprijs`).
+
+*(Do not use the monthly totals or monthly cost sensors in the Energy Dashboard configuration.)*
+
+> **⚠️ Note:** After installing the integration, it can take up to two hours for Home Assistant to generate the initial statistics. The sensors may not appear in the Energy Dashboard dropdown menus immediately. If they are missing, please wait a while and try again.
+
 ## Example Dashboards
 
 Using the popular [ApexCharts Card](https://github.com/RomRider/apexcharts-card), you can create beautiful graphs that color-code the current electricity and gas prices.
