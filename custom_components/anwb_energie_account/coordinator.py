@@ -43,6 +43,15 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+_DNS_FAILURE_MARKERS = (
+    "dns",
+    "getaddrinfo failed",
+    "name or service not known",
+    "name resolution",
+    "nodename nor servname",
+    "temporary failure in name resolution",
+)
+
 
 class ANWBBaseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Base coordinator to manage ANWB token and account."""
@@ -70,6 +79,36 @@ class ANWBBaseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._account_number: str | None = None
         self._account_address: str | None = None
         self.last_successful_update: datetime | None = None
+
+    def _can_use_cached_data_for_dns_failure(self, err: Exception) -> bool:
+        """Return whether a DNS failure can reuse cached data."""
+        if (
+            self.data is None
+            or self.last_successful_update is None
+            or not isinstance(err, UpdateFailed)
+            or not self._is_dns_failure(err)
+        ):
+            return False
+
+        now = dt_util.utcnow()
+        last_success = self.last_successful_update
+        if now.tzinfo is None and last_success.tzinfo is not None:
+            now = now.replace(tzinfo=last_success.tzinfo)
+        elif now.tzinfo is not None and last_success.tzinfo is None:
+            last_success = last_success.replace(tzinfo=now.tzinfo)
+
+        return now - last_success <= timedelta(hours=24)
+
+    @staticmethod
+    def _is_dns_failure(err: Exception) -> bool:
+        """Return whether an exception chain looks like a DNS failure."""
+        current: BaseException | None = err
+        while current is not None:
+            message = str(current).lower()
+            if any(marker in message for marker in _DNS_FAILURE_MARKERS):
+                return True
+            current = current.__cause__ or current.__context__
+        return False
 
     async def _async_get_kraken_token(self) -> str:
         """Get or refresh kraken token."""
@@ -370,13 +409,16 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
                     self.last_successful_update = dt_util.utcnow()
                     return data
                 except Exception as retry_err:
-                    if self.data is not None:
-                        _LOGGER.warning("Update failed after token refresh, using cached data: %s", retry_err)
+                    if self._can_use_cached_data_for_dns_failure(retry_err):
+                        _LOGGER.warning(
+                            "DNS failure after token refresh, using cached data: %s",
+                            retry_err,
+                        )
                         return self.data
                     raise
 
-            if self.data is not None:
-                _LOGGER.warning("Update failed, using cached data: %s", err)
+            if self._can_use_cached_data_for_dns_failure(err):
+                _LOGGER.warning("DNS failure, using cached data: %s", err)
                 return self.data
             raise
 

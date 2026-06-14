@@ -1,6 +1,7 @@
 # ruff: noqa: E402, E501
 """Test the ANWB Energie Account coordinator."""
 
+import importlib
 import sys
 from unittest.mock import MagicMock, AsyncMock, patch
 import pytest
@@ -70,9 +71,10 @@ sys.modules[
 sys.modules["homeassistant.helpers.update_coordinator"].UpdateFailed = UpdateFailed
 
 import datetime  # noqa: E402
-from custom_components.anwb_energie_account.coordinator import (  # noqa: E402
-    ANWBConsumptionCoordinator,
-)
+import custom_components.anwb_energie_account.coordinator as coord_mod  # noqa: E402
+
+coord_mod = importlib.reload(coord_mod)
+ANWBConsumptionCoordinator = coord_mod.ANWBConsumptionCoordinator
 
 
 @pytest.fixture
@@ -191,7 +193,6 @@ async def test_dns_failure_grace_period(auth_mock):
     """Test coordinator handles DNS failure with 24h grace period."""
     hass = MagicMock()
     config_entry = MagicMock()
-    from homeassistant.helpers.update_coordinator import UpdateFailed
 
     coordinator = ANWBConsumptionCoordinator(hass, auth_mock, config_entry)
     coordinator._kraken_token = "mock_kraken_token"
