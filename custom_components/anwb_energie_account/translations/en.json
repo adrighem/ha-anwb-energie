@@ -31,10 +31,55 @@
         }
     },
     "entity": {
-        "sensor": {
-            "current_price": {
-                "name": "Current electricity price"
-            },
+    "sensor": {
+      "electricity_import_month_to_date": {
+        "name": "Electricity import month to date"
+      },
+      "electricity_export_month_to_date": {
+        "name": "Electricity export month to date"
+      },
+      "electricity_import_month_to_date_cost": {
+        "name": "Electricity import cost month to date"
+      },
+      "electricity_export_month_to_date_credit": {
+        "name": "Electricity export credit month to date"
+      },
+      "electricity_import_year_to_date": {
+        "name": "Electricity import year to date"
+      },
+      "electricity_export_year_to_date": {
+        "name": "Electricity export year to date"
+      },
+      "electricity_month_to_date_fixed_cost": {
+        "name": "Electricity fixed cost month to date"
+      },
+      "electricity_month_to_date_total_cost": {
+        "name": "Electricity total cost month to date"
+      },
+      "electricity_current_price": {
+        "name": "Electricity current price"
+      },
+      "gas_month_to_date": {
+        "name": "Gas usage month to date"
+      },
+      "gas_month_to_date_cost": {
+        "name": "Gas cost month to date"
+      },
+      "gas_year_to_date": {
+        "name": "Gas usage year to date"
+      },
+      "gas_month_to_date_fixed_cost": {
+        "name": "Gas fixed cost month to date"
+      },
+      "gas_month_to_date_total_cost": {
+        "name": "Gas total cost month to date"
+      },
+      "gas_current_price": {
+        "name": "Gas current price"
+      },
+      "current_price": {
+        "name": "Current electricity price"
+      },
             "export_cost": {
                 "name": "Monthly export cost"
             },

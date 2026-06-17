@@ -3,6 +3,7 @@
 
 import importlib
 import sys
+from types import SimpleNamespace
 from unittest.mock import MagicMock, AsyncMock, patch
 import pytest
 
@@ -75,6 +76,7 @@ import custom_components.anwb_energie_account.coordinator as coord_mod  # noqa: 
 
 coord_mod = importlib.reload(coord_mod)
 ANWBConsumptionCoordinator = coord_mod.ANWBConsumptionCoordinator
+ANWBPricingCoordinator = coord_mod.ANWBPricingCoordinator
 
 
 @pytest.fixture
@@ -176,17 +178,249 @@ async def test_update_data_with_gas(auth_mock):
         assert result["import_usage"] == 1.5
         assert result["export_usage"] == 0.5
         assert result["gas_usage"] == 2.5
+        assert result["electricity_import_month_to_date"] == 1.5
+        assert result["electricity_export_month_to_date"] == 0.5
+        assert result["gas_month_to_date"] == 2.5
 
         # 1.5 * (20.0 / 100) = 0.30
         assert result["import_cost"] == 0.30
+        assert result["electricity_import_month_to_date_cost"] == 0.30
 
         # 0.5 * (20.0 / 100) = 0.10
         assert result["export_cost"] == 0.10
+        assert result["electricity_export_month_to_date_credit"] == 0.10
 
         # 2.5 * (120.0 / 100) = 3.0
         assert result["gas_cost"] == 3.0
+        assert result["gas_month_to_date_cost"] == 3.0
 
         assert result["total_cost_gas"] == pytest.approx(3.0 + 3.0)
+        assert result["gas_month_to_date_total_cost"] == pytest.approx(3.0 + 3.0)
+
+
+@pytest.mark.asyncio
+async def test_consumption_endpoint_granularities(auth_mock):
+    """Test consumption coordinator queries the intended cache granularities."""
+    hass = MagicMock()
+    config_entry = MagicMock()
+
+    coordinator = ANWBConsumptionCoordinator(hass, auth_mock, config_entry)
+    coordinator._kraken_token = "mock_kraken_token"
+    coordinator._account_number = "12345"
+    coordinator._account_address = "Mock Address"
+
+    mock_now = datetime.datetime(2026, 4, 20, 12, 0, 0)
+    urls = []
+
+    with patch.object(coord_mod.dt_util, "utcnow", return_value=mock_now), patch.object(
+        coordinator, "_async_fetch_data", new_callable=AsyncMock
+    ) as mock_fetch, patch.object(
+        coordinator, "_insert_statistics", new_callable=AsyncMock
+    ):
+
+        async def mock_fetch_side_effect(url, token):
+            urls.append(url)
+            if "tarieven/" in url:
+                return {"data": []}
+            return {"data": []}
+
+        mock_fetch.side_effect = mock_fetch_side_effect
+
+        await coordinator._async_update_data_internal()
+
+    assert any("electricity/cache" in url and "interval=HOUR" in url for url in urls)
+    assert any("production/cache" in url and "interval=HOUR" in url for url in urls)
+    assert any("gas/cache" in url and "interval=HOUR" in url for url in urls)
+
+    assert any("electricity/cache" in url and "interval=MONTH" in url for url in urls)
+    assert any("production/cache" in url and "interval=MONTH" in url for url in urls)
+    assert any("gas/cache" in url and "interval=MONTH" in url for url in urls)
+
+    tariff_urls = [url for url in urls if "tarieven/" in url]
+    assert tariff_urls
+    assert all("interval=HOUR" in url for url in tariff_urls)
+
+
+@pytest.mark.asyncio
+async def test_pricing_keeps_local_day_rows_with_previous_utc_date(auth_mock):
+    """Test local-day tariff rows are not dropped when their UTC date differs."""
+    hass = MagicMock()
+    config_entry = MagicMock()
+
+    coordinator = ANWBPricingCoordinator(hass, auth_mock, config_entry)
+    coordinator._kraken_token = "mock_kraken_token"
+    coordinator._account_number = "12345"
+    coordinator._account_address = "Mock Address"
+
+    mock_now = datetime.datetime(2026, 6, 15, 12, 0, 0, tzinfo=datetime.timezone.utc)
+    cest = datetime.timezone(datetime.timedelta(hours=2))
+
+    def as_cest(value):
+        return value.astimezone(cest)
+
+    async def mock_fetch_side_effect(url, token):
+        if "tarieven/electricity" in url:
+            return {
+                "data": [
+                    {
+                        "date": "2026-06-14T22:00:00+00:00",
+                        "values": {"allInPrijs": 20.0},
+                    },
+                    {
+                        "date": "2026-06-15T22:00:00+00:00",
+                        "values": {"allInPrijs": 30.0},
+                    },
+                    {
+                        "date": "2026-06-16T22:00:00+00:00",
+                        "values": {"allInPrijs": 40.0},
+                    },
+                ]
+            }
+        if "tarieven/gas" in url:
+            return {
+                "data": [
+                    {
+                        "date": "2026-06-14T22:00:00+00:00",
+                        "values": {"allInPrijs": 120.0},
+                    },
+                    {
+                        "date": "2026-06-15T22:00:00+00:00",
+                        "values": {"allInPrijs": 130.0},
+                    },
+                    {
+                        "date": "2026-06-16T22:00:00+00:00",
+                        "values": {"allInPrijs": 140.0},
+                    },
+                ]
+            }
+        return {}
+
+    with patch.object(coord_mod.dt_util, "utcnow", return_value=mock_now), patch.object(
+        coord_mod.dt_util, "as_local", side_effect=as_cest
+    ), patch.object(
+        coordinator, "_async_fetch_data", new_callable=AsyncMock
+    ) as mock_fetch:
+        mock_fetch.side_effect = mock_fetch_side_effect
+
+        result = await coordinator._async_update_data_internal()
+
+    assert result["prices_today"]["2026-06-14T22:00:00.000Z"] == 20.0
+    assert result["prices_today"]["2026-06-15T22:00:00.000Z"] == 30.0
+    assert "2026-06-16T22:00:00.000Z" not in result["prices_today"]
+
+    assert result["gas_prices_today"]["2026-06-14T22:00:00.000Z"] == 120.0
+    assert result["gas_prices_today"]["2026-06-15T22:00:00.000Z"] == 130.0
+    assert "2026-06-16T22:00:00.000Z" not in result["gas_prices_today"]
+
+
+@pytest.mark.asyncio
+async def test_graphql_auth_errors_refresh_kraken_token(auth_mock):
+    """Test GraphQL HTTP 200 auth errors trigger the token refresh path."""
+    hass = MagicMock()
+    config_entry = MagicMock()
+
+    coordinator = ANWBConsumptionCoordinator(hass, auth_mock, config_entry)
+
+    class MockResponse:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        def raise_for_status(self):
+            return None
+
+        async def json(self):
+            return {
+                "data": {"viewer": None},
+                "errors": [
+                    {
+                        "message": "Unauthorized",
+                        "extensions": {"errorType": "AUTHORIZATION"},
+                    }
+                ],
+            }
+
+    auth_mock.websession.post = MagicMock(return_value=MockResponse())
+
+    with pytest.raises(UpdateFailed, match="Kraken token expired"):
+        await coordinator._async_get_account_info("expired_token")
+
+
+@pytest.mark.asyncio
+async def test_insert_statistics_resumes_from_latest_existing_stat(auth_mock):
+    """Test statistics insertion resumes from the newest existing statistic."""
+    hass = MagicMock()
+    config_entry = MagicMock()
+
+    coordinator = ANWBConsumptionCoordinator(hass, auth_mock, config_entry)
+    coordinator.hass = hass
+    coordinator._account_number = "12345"
+
+    statistic_id = "anwb_energie_account:import_usage_12345"
+    recorder = MagicMock()
+    recorder.async_add_executor_job = AsyncMock(
+        return_value={
+            statistic_id: [
+                {
+                    "start": datetime.datetime(
+                        2026, 4, 20, 10, tzinfo=datetime.timezone.utc
+                    ).timestamp(),
+                    "sum": 10.0,
+                },
+                {
+                    "start": datetime.datetime(
+                        2026, 4, 20, 12, tzinfo=datetime.timezone.utc
+                    ).timestamp(),
+                    "sum": 20.0,
+                },
+            ]
+        }
+    )
+
+    class StatisticData:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class StatisticMetaData:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    recorded = {}
+
+    def add_statistics(hass, metadata, statistics):
+        recorded[metadata.statistic_id] = statistics
+
+    with patch.object(coord_mod, "get_instance", return_value=recorder), patch.object(
+        coord_mod, "StatisticData", StatisticData
+    ), patch.object(
+        coord_mod, "StatisticMetaData", StatisticMetaData
+    ), patch.object(
+        coord_mod, "StatisticMeanType", SimpleNamespace(NONE="none")
+    ), patch.object(
+        coord_mod, "async_add_external_statistics", side_effect=add_statistics
+    ):
+        await coordinator._insert_statistics(
+            [
+                {"startDate": "2026-04-20T11:00:00.000Z", "usage": 1.0},
+                {"startDate": "2026-04-20T12:00:00.000Z", "usage": 1.0},
+                {"startDate": "2026-04-20T13:00:00.000Z", "usage": 1.0},
+            ],
+            [],
+            {},
+            [],
+            {},
+        )
+
+    assert len(recorded[statistic_id]) == 1
+    assert recorded[statistic_id][0].start == datetime.datetime(
+        2026, 4, 20, 13, tzinfo=datetime.timezone.utc
+    )
+    assert recorded[statistic_id][0].sum == 21.0
+
 
 @pytest.mark.asyncio
 async def test_dns_failure_grace_period(auth_mock):

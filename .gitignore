@@ -21,6 +21,11 @@ htmlcov/
 # Logs and debug files
 *.log
 log.txt
+token*.txt
+
+# Local ANWB API probing. Contains OAuth/Kraken tokens and redacted reports.
+.anwb-api-probe/
+*.tokens.json
 
 # Editor / OS files
 .DS_Store

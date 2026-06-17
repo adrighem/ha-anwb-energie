@@ -32,6 +32,51 @@
   },
   "entity": {
     "sensor": {
+      "electricity_import_month_to_date": {
+        "name": "Elektriciteitsimport maand tot nu toe"
+      },
+      "electricity_export_month_to_date": {
+        "name": "Elektriciteitsexport maand tot nu toe"
+      },
+      "electricity_import_month_to_date_cost": {
+        "name": "Importkosten elektriciteit maand tot nu toe"
+      },
+      "electricity_export_month_to_date_credit": {
+        "name": "Exportvergoeding elektriciteit maand tot nu toe"
+      },
+      "electricity_import_year_to_date": {
+        "name": "Elektriciteitsimport jaar tot nu toe"
+      },
+      "electricity_export_year_to_date": {
+        "name": "Elektriciteitsexport jaar tot nu toe"
+      },
+      "electricity_month_to_date_fixed_cost": {
+        "name": "Vaste elektriciteitskosten maand tot nu toe"
+      },
+      "electricity_month_to_date_total_cost": {
+        "name": "Totale elektriciteitskosten maand tot nu toe"
+      },
+      "electricity_current_price": {
+        "name": "Actuele elektriciteitsprijs"
+      },
+      "gas_month_to_date": {
+        "name": "Gasverbruik maand tot nu toe"
+      },
+      "gas_month_to_date_cost": {
+        "name": "Gaskosten maand tot nu toe"
+      },
+      "gas_year_to_date": {
+        "name": "Gasverbruik jaar tot nu toe"
+      },
+      "gas_month_to_date_fixed_cost": {
+        "name": "Vaste gaskosten maand tot nu toe"
+      },
+      "gas_month_to_date_total_cost": {
+        "name": "Totale gaskosten maand tot nu toe"
+      },
+      "gas_current_price": {
+        "name": "Actuele gasprijs"
+      },
       "import_usage": {
         "name": "Maandelijks importverbruik"
       },

@@ -4,6 +4,8 @@
 import sys
 from unittest.mock import MagicMock
 
+import pytest
+
 # Mock homeassistant modules to allow testing without core
 sys.modules["homeassistant"] = MagicMock()
 sys.modules["homeassistant.core"] = MagicMock()
@@ -106,14 +108,33 @@ sys.modules[
 
 # Now import sensor
 from custom_components.anwb_energie_account.sensor import (
+    LEGACY_SENSOR_KEYS,
+    SENSOR_DATA_KEYS,
     SENSOR_TYPES,
     ANWBEnergieAccountSensor,
+    async_setup_entry,
 )
 
 
 def test_sensor_types():
     """Test that all expected sensors are defined."""
     keys = [desc.key for desc in SENSOR_TYPES]
+
+    assert "electricity_import_month_to_date" in keys
+    assert "electricity_export_month_to_date" in keys
+    assert "electricity_import_month_to_date_cost" in keys
+    assert "electricity_export_month_to_date_credit" in keys
+    assert "electricity_import_year_to_date" in keys
+    assert "electricity_export_year_to_date" in keys
+    assert "electricity_month_to_date_fixed_cost" in keys
+    assert "electricity_month_to_date_total_cost" in keys
+    assert "electricity_current_price" in keys
+    assert "gas_month_to_date" in keys
+    assert "gas_month_to_date_cost" in keys
+    assert "gas_year_to_date" in keys
+    assert "gas_month_to_date_fixed_cost" in keys
+    assert "gas_month_to_date_total_cost" in keys
+    assert "gas_current_price" in keys
 
     assert "import_usage" in keys
     assert "export_usage" in keys
@@ -134,6 +155,43 @@ def test_sensor_types():
     assert "current_gas_price" in keys
 
 
+def test_legacy_sensors_are_default_disabled():
+    """Test legacy compatibility entities are disabled by default."""
+    coordinator = MagicMock()
+    coordinator.data = {"account_number": "12345"}
+
+    legacy_description = next(d for d in SENSOR_TYPES if d.key == "import_usage")
+    legacy_sensor = ANWBEnergieAccountSensor(coordinator, legacy_description)
+    assert legacy_description.key in LEGACY_SENSOR_KEYS
+    assert legacy_sensor._attr_entity_registry_enabled_default is False
+
+    canonical_description = next(
+        d for d in SENSOR_TYPES if d.key == "electricity_import_month_to_date"
+    )
+    canonical_sensor = ANWBEnergieAccountSensor(coordinator, canonical_description)
+    assert canonical_description.key not in LEGACY_SENSOR_KEYS
+    assert canonical_sensor._attr_entity_registry_enabled_default is True
+
+
+def test_legacy_sensor_data_keys_point_to_canonical_values():
+    """Test legacy entity keys are aliases for the intended canonical data keys."""
+    assert SENSOR_DATA_KEYS == {
+        "import_usage": "electricity_import_month_to_date",
+        "export_usage": "electricity_export_month_to_date",
+        "import_cost": "electricity_import_month_to_date_cost",
+        "export_cost": "electricity_export_month_to_date_credit",
+        "yearly_import_usage": "electricity_import_year_to_date",
+        "yearly_export_usage": "electricity_export_year_to_date",
+        "fixed_cost": "electricity_month_to_date_fixed_cost",
+        "total_cost": "electricity_month_to_date_total_cost",
+        "gas_usage": "gas_month_to_date",
+        "gas_cost": "gas_month_to_date_cost",
+        "yearly_gas_usage": "gas_year_to_date",
+        "fixed_cost_gas": "gas_month_to_date_fixed_cost",
+        "total_cost_gas": "gas_month_to_date_total_cost",
+    }
+
+
 import datetime  # noqa: E402
 
 
@@ -152,6 +210,8 @@ def test_sensor_native_value():
             "2026-04-20T00:00:00.000Z": 125.432,
         },
         "gas_usage": 12.345,
+        "yearly_gas_usage": 123.456,
+        "gas_year_to_date": 123.456,
     }
 
     from unittest.mock import patch
@@ -163,8 +223,18 @@ def test_sensor_native_value():
         sensor = ANWBEnergieAccountSensor(coordinator, desc)
         assert sensor.native_value == 0.2543
 
+        # Test canonical electricity_current_price
+        desc = next(d for d in SENSOR_TYPES if d.key == "electricity_current_price")
+        sensor = ANWBEnergieAccountSensor(coordinator, desc)
+        assert sensor.native_value == 0.2543
+
         # Test current_gas_price
         desc = next(d for d in SENSOR_TYPES if d.key == "current_gas_price")
+        sensor = ANWBEnergieAccountSensor(coordinator, desc)
+        assert sensor.native_value == 1.2543
+
+        # Test canonical gas_current_price
+        desc = next(d for d in SENSOR_TYPES if d.key == "gas_current_price")
         sensor = ANWBEnergieAccountSensor(coordinator, desc)
         assert sensor.native_value == 1.2543
 
@@ -172,6 +242,11 @@ def test_sensor_native_value():
         desc = next(d for d in SENSOR_TYPES if d.key == "gas_usage")
         sensor = ANWBEnergieAccountSensor(coordinator, desc)
         assert sensor.native_value == 12.35
+
+        # Test canonical value backed by legacy coordinator data.
+        desc = next(d for d in SENSOR_TYPES if d.key == "gas_year_to_date")
+        sensor = ANWBEnergieAccountSensor(coordinator, desc)
+        assert sensor.native_value == 123.46
 
 
 def test_sensor_extra_attributes():
@@ -195,8 +270,24 @@ def test_sensor_extra_attributes():
     assert "prices" in attrs
     assert attrs["prices"][0]["price"] == 0.2543
 
+    # Test canonical electricity_current_price
+    desc = next(d for d in SENSOR_TYPES if d.key == "electricity_current_price")
+    sensor = ANWBEnergieAccountSensor(coordinator, desc)
+    attrs = sensor.extra_state_attributes
+    assert attrs is not None
+    assert "prices" in attrs
+    assert attrs["prices"][0]["price"] == 0.2543
+
     # Test current_gas_price
     desc = next(d for d in SENSOR_TYPES if d.key == "current_gas_price")
+    sensor = ANWBEnergieAccountSensor(coordinator, desc)
+    attrs = sensor.extra_state_attributes
+    assert attrs is not None
+    assert "prices" in attrs
+    assert attrs["prices"][0]["price"] == 1.2543
+
+    # Test canonical gas_current_price
+    desc = next(d for d in SENSOR_TYPES if d.key == "gas_current_price")
     sensor = ANWBEnergieAccountSensor(coordinator, desc)
     attrs = sensor.extra_state_attributes
     assert attrs is not None
@@ -207,3 +298,29 @@ def test_sensor_extra_attributes():
     desc = next(d for d in SENSOR_TYPES if d.key == "import_usage")
     sensor = ANWBEnergieAccountSensor(coordinator, desc)
     assert sensor.extra_state_attributes is None
+
+
+@pytest.mark.asyncio
+async def test_setup_entry_routes_price_sensors_to_pricing_coordinator():
+    """Test current price entities use the pricing coordinator."""
+    consumption = MagicMock()
+    consumption.data = {"account_number": "12345"}
+    pricing = MagicMock()
+    pricing.data = {"account_number": "12345"}
+
+    entry = MagicMock()
+    entry.runtime_data = MagicMock(consumption=consumption, pricing=pricing)
+
+    added_entities = []
+
+    def async_add_entities(entities):
+        added_entities.extend(entities)
+
+    await async_setup_entry(MagicMock(), entry, async_add_entities)
+
+    entities_by_key = {entity.entity_description.key: entity for entity in added_entities}
+    assert entities_by_key["electricity_current_price"].coordinator is pricing
+    assert entities_by_key["current_price"].coordinator is pricing
+    assert entities_by_key["gas_current_price"].coordinator is pricing
+    assert entities_by_key["current_gas_price"].coordinator is pricing
+    assert entities_by_key["electricity_import_year_to_date"].coordinator is consumption

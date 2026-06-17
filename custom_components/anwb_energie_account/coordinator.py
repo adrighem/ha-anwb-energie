@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import calendar
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 import logging
 from typing import Any
 
@@ -51,6 +51,75 @@ _DNS_FAILURE_MARKERS = (
     "nodename nor servname",
     "temporary failure in name resolution",
 )
+
+
+def _as_utc(value: datetime) -> datetime:
+    """Return a timezone-aware UTC datetime."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _as_local(value: datetime) -> datetime:
+    """Return a local datetime using Home Assistant's configured timezone."""
+    value = _as_utc(value)
+    try:
+        local_value = dt_util.as_local(value)
+    except (AttributeError, TypeError, ValueError):
+        local_value = None
+
+    if isinstance(local_value, datetime):
+        return local_value
+
+    return value.astimezone()
+
+
+def _parse_api_datetime(value: str | None) -> datetime | None:
+    """Parse an ANWB API datetime value as a timezone-aware datetime."""
+    if not value:
+        return None
+
+    normalized = value.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        parsed = dt_util.parse_datetime(value)
+
+    if not isinstance(parsed, datetime):
+        return None
+
+    return _as_utc(parsed)
+
+
+def _normalize_api_datetime_key(value: str | None) -> str | None:
+    """Normalize an ANWB API datetime to the hourly UTC key used internally."""
+    parsed = _parse_api_datetime(value)
+    if parsed is None:
+        return None
+
+    return parsed.replace(minute=0, second=0, microsecond=0).strftime(
+        "%Y-%m-%dT%H:00:00.000Z"
+    )
+
+
+def _local_date_for_api_datetime(value: str | None) -> date | None:
+    """Return the Home Assistant local date for an ANWB API datetime."""
+    parsed = _parse_api_datetime(value)
+    if parsed is None:
+        return None
+
+    return _as_local(parsed).date()
+
+
+def _stat_start_datetime(value: Any) -> datetime | None:
+    """Return a timezone-aware UTC datetime for a recorder statistic start value."""
+    if isinstance(value, datetime):
+        return _as_utc(value)
+    if isinstance(value, (float, int)):
+        return datetime.fromtimestamp(value, timezone.utc)
+    if isinstance(value, str):
+        return _parse_api_datetime(value)
+    return None
 
 
 class ANWBBaseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -164,7 +233,43 @@ class ANWBBaseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     )
                 resp.raise_for_status()
                 data = await resp.json()
-                accounts = data.get("data", {}).get("viewer", {}).get("accounts", [])
+                errors = data.get("errors") or []
+                if errors:
+                    auth_error = False
+                    messages: list[str] = []
+                    for error in errors:
+                        if not isinstance(error, dict):
+                            continue
+
+                        message = error.get("message")
+                        message_text = str(message) if message else ""
+                        if message_text:
+                            messages.append(message_text)
+                        if "AUTH" in message_text.upper():
+                            auth_error = True
+
+                        extensions = error.get("extensions", {})
+                        if not isinstance(extensions, dict):
+                            continue
+
+                        error_type = str(extensions.get("errorType", "")).upper()
+                        error_code = str(extensions.get("errorCode", "")).upper()
+                        if "AUTH" in error_type or "AUTH" in error_code:
+                            auth_error = True
+
+                    if auth_error:
+                        raise UpdateFailed(
+                            "Kraken token expired or invalid fetching account number"
+                        )
+
+                    message = "; ".join(messages) if messages else "unknown error"
+                    raise UpdateFailed(
+                        f"GraphQL error fetching account number: {message}"
+                    )
+
+                payload = data.get("data") or {}
+                viewer = payload.get("viewer") or {}
+                accounts = viewer.get("accounts", [])
                 if not accounts:
                     raise UpdateFailed("No active accounts found")
 
@@ -260,13 +365,10 @@ class ANWBPricingCoordinator(ANWBBaseCoordinator):
             self._account_number = info["number"]
             self._account_address = info["address"]
 
-        now = dt_util.utcnow()
-        now.replace(minute=0, second=0, microsecond=0).strftime(
-            "%Y-%m-%dT%H:00:00.000Z"
-        )
-        today_str = now.strftime("%Y-%m-%d")
-        tomorrow = now + timedelta(days=1)
-        tomorrow_str = tomorrow.strftime("%Y-%m-%d")
+        now = _as_utc(dt_util.utcnow())
+        local_now = _as_local(now)
+        today = local_now.date()
+        tomorrow = today + timedelta(days=1)
 
         has_tomorrow_electricity = False
         has_tomorrow_gas = False
@@ -275,16 +377,16 @@ class ANWBPricingCoordinator(ANWBBaseCoordinator):
             prices = self.data.get("prices_today", {})
             gas_prices = self.data.get("gas_prices_today", {})
             for k in prices:
-                if k.startswith(tomorrow_str):
+                if _local_date_for_api_datetime(k) == tomorrow:
                     has_tomorrow_electricity = True
                     break
             for k in gas_prices:
-                if k.startswith(tomorrow_str):
+                if _local_date_for_api_datetime(k) == tomorrow:
                     has_tomorrow_gas = True
                     break
 
-        fetch_electricity = not has_tomorrow_electricity and now.hour >= 13
-        fetch_gas = not has_tomorrow_gas and now.hour >= 6
+        fetch_electricity = not has_tomorrow_electricity and local_now.hour >= 13
+        fetch_gas = not has_tomorrow_gas and local_now.hour >= 6
 
         if not self.data:
             fetch_electricity = True
@@ -303,7 +405,7 @@ class ANWBPricingCoordinator(ANWBBaseCoordinator):
         price_tasks = []
         gas_price_tasks = []
 
-        days_to_fetch = [now, tomorrow]
+        days_to_fetch = [today, tomorrow]
 
         for d in days_to_fetch:
             day_start = f"{d.year}-{d.month:02d}-{d.day:02d}T00:00:00.000Z"
@@ -332,9 +434,11 @@ class ANWBPricingCoordinator(ANWBBaseCoordinator):
                 for res_prices in prices_results:
                     if res_prices.get("data"):
                         for p in res_prices["data"]:
-                            dt_str = p.get("date", "").replace("+00:00", ".000Z")
+                            dt_str = _normalize_api_datetime_key(p.get("date"))
+                            if dt_str is None:
+                                continue
                             vals = p.get("values", {})
-                            price_map[dt_str] = vals.get("allInPrijs", 0.0)
+                            price_map[dt_str] = vals.get("allInPrijs") or 0.0
         except UpdateFailed as err:
             if "Kraken token expired" in str(err):
                 raise
@@ -346,9 +450,11 @@ class ANWBPricingCoordinator(ANWBBaseCoordinator):
                 for res_prices in gas_prices_results:
                     if res_prices.get("data"):
                         for p in res_prices["data"]:
-                            dt_str = p.get("date", "").replace("+00:00", ".000Z")
+                            dt_str = _normalize_api_datetime_key(p.get("date"))
+                            if dt_str is None:
+                                continue
                             vals = p.get("values", {})
-                            gas_price_map[dt_str] = vals.get("allInPrijs", 0.0)
+                            gas_price_map[dt_str] = vals.get("allInPrijs") or 0.0
         except UpdateFailed as err:
             if "Kraken token expired" in str(err):
                 raise
@@ -357,13 +463,13 @@ class ANWBPricingCoordinator(ANWBBaseCoordinator):
         filtered_prices = {
             k: v
             for k, v in price_map.items()
-            if k.startswith(today_str) or k.startswith(tomorrow_str)
+            if _local_date_for_api_datetime(k) in (today, tomorrow)
         }
 
         filtered_gas_prices = {
             k: v
             for k, v in gas_price_map.items()
-            if k.startswith(today_str) or k.startswith(tomorrow_str)
+            if _local_date_for_api_datetime(k) in (today, tomorrow)
         }
 
         return {
@@ -431,7 +537,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
             self._account_number = info["number"]
             self._account_address = info["address"]
 
-        now = dt_util.utcnow()
+        now = _as_local(dt_util.utcnow())
         start = f"{now.year}-{now.month:02d}-01T00:00:00.000Z"
         last_day = calendar.monthrange(now.year, now.month)[1]
         end = f"{now.year}-{now.month:02d}-{last_day}T23:59:59.999Z"
@@ -535,9 +641,11 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
             for res_prices in prices_results:
                 if res_prices.get("data"):
                     for p in res_prices["data"]:
-                        dt_str = p.get("date", "").replace("+00:00", ".000Z")
+                        dt_str = _normalize_api_datetime_key(p.get("date"))
+                        if dt_str is None:
+                            continue
                         vals = p.get("values", {})
-                        price_map[dt_str] = vals.get("allInPrijs", 0.0)
+                        price_map[dt_str] = vals.get("allInPrijs") or 0.0
         except UpdateFailed as err:
             if "Kraken token expired" in str(err):
                 raise
@@ -548,9 +656,11 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
             for res_prices in gas_prices_results:
                 if res_prices.get("data"):
                     for p in res_prices["data"]:
-                        dt_str = p.get("date", "").replace("+00:00", ".000Z")
+                        dt_str = _normalize_api_datetime_key(p.get("date"))
+                        if dt_str is None:
+                            continue
                         vals = p.get("values", {})
-                        gas_price_map[dt_str] = vals.get("allInPrijs", 0.0)
+                        gas_price_map[dt_str] = vals.get("allInPrijs") or 0.0
         except UpdateFailed as err:
             if "Kraken token expired" in str(err):
                 raise
@@ -572,8 +682,8 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
 
             for d in res_import["data"]:
                 usage = d.get("usage", 0.0)
-                timestamp = d.get("startDate", "").replace("+00:00", ".000Z")
-                price_cents = price_map.get(timestamp, 0.0)
+                timestamp = _normalize_api_datetime_key(d.get("startDate"))
+                price_cents = price_map.get(timestamp, 0.0) if timestamp else 0.0
 
                 import_usage += usage
                 import_cost += (usage * price_cents) / 100.0
@@ -583,8 +693,8 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
         if res_export.get("data"):
             for d in res_export["data"]:
                 usage = d.get("usage", 0.0)
-                timestamp = d.get("startDate", "").replace("+00:00", ".000Z")
-                price_cents = price_map.get(timestamp, 0.0)
+                timestamp = _normalize_api_datetime_key(d.get("startDate"))
+                price_cents = price_map.get(timestamp, 0.0) if timestamp else 0.0
 
                 export_usage += usage
                 export_cost += (usage * price_cents) / 100.0
@@ -612,8 +722,8 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
 
             for d in res_import_gas["data"]:
                 usage = d.get("usage", 0.0)
-                timestamp = d.get("startDate", "").replace("+00:00", ".000Z")
-                price_cents = gas_price_map.get(timestamp, 0.0)
+                timestamp = _normalize_api_datetime_key(d.get("startDate"))
+                price_cents = gas_price_map.get(timestamp, 0.0) if timestamp else 0.0
 
                 gas_usage += usage
                 gas_cost += (usage * price_cents) / 100.0
@@ -635,7 +745,11 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
                         latest_ts = ts
 
             if latest_ts:
-                days_with_data = datetime.strptime(latest_ts[:10], "%Y-%m-%d").day
+                parsed_latest = _parse_api_datetime(latest_ts)
+                if parsed_latest:
+                    days_with_data = _as_local(parsed_latest).day
+                else:
+                    days_with_data = datetime.strptime(latest_ts[:10], "%Y-%m-%d").day
 
             fraction = days_with_data / float(last_day)
 
@@ -659,9 +773,9 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
 
             days_with_data_gas = now.day
             if latest_ts_gas:
-                parsed_dt_gas = dt_util.parse_datetime(latest_ts_gas)
+                parsed_dt_gas = _parse_api_datetime(latest_ts_gas)
                 if parsed_dt_gas:
-                    days_with_data_gas = dt_util.as_local(parsed_dt_gas).day
+                    days_with_data_gas = _as_local(parsed_dt_gas).day
                 else:
                     days_with_data_gas = datetime.strptime(
                         latest_ts_gas[:10], "%Y-%m-%d"
@@ -686,6 +800,19 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
         )
 
         return {
+            "electricity_import_month_to_date": import_usage,
+            "electricity_import_month_to_date_cost": import_cost,
+            "electricity_export_month_to_date": export_usage,
+            "electricity_export_month_to_date_credit": export_cost,
+            "electricity_import_year_to_date": yearly_import_usage,
+            "electricity_export_year_to_date": yearly_export_usage,
+            "electricity_month_to_date_fixed_cost": total_fixed_costs,
+            "electricity_month_to_date_total_cost": total_cost,
+            "gas_month_to_date": gas_usage,
+            "gas_month_to_date_cost": gas_cost,
+            "gas_year_to_date": yearly_gas_usage,
+            "gas_month_to_date_fixed_cost": total_fixed_costs_gas,
+            "gas_month_to_date_total_cost": total_cost_gas,
             "import_usage": import_usage,
             "import_cost": import_cost,
             "export_usage": export_usage,
@@ -747,17 +874,17 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
                 )
             )
 
-            sorted_data = sorted(data_list, key=lambda x: x["startDate"])
-            if not sorted_data:
+            parsed_data = [
+                (start_time, data)
+                for data in data_list
+                if (start_time := _parse_api_datetime(data.get("startDate")))
+                is not None
+            ]
+            parsed_data.sort(key=lambda item: item[0])
+            if not parsed_data:
                 continue
 
-            first_dt_str = sorted_data[0]["startDate"].replace("+00:00", ".000Z")
-            if first_dt_str.endswith("Z"):
-                first_dt_str = first_dt_str[:-1] + "+00:00"
-            from_time = dt_util.parse_datetime(first_dt_str)
-            if from_time is None:
-                continue
-
+            from_time = parsed_data[0][0]
             start = from_time - timedelta(hours=1)
             stat = await get_instance(self.hass).async_add_executor_job(
                 statistics_during_period,
@@ -771,33 +898,31 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
             )
 
             _sum = 0.0
-            last_stats_time = None
+            last_stats_time_dt = None
 
             if statistic_id in stat and stat[statistic_id]:
-                first_stat = stat[statistic_id][0]
-                _sum = first_stat.get("sum", 0.0)
-                last_stats_time = first_stat["start"]
+                existing_stats = [
+                    (stat_start, row)
+                    for row in stat[statistic_id]
+                    if (stat_start := _stat_start_datetime(row.get("start")))
+                    is not None
+                ]
+                if existing_stats:
+                    last_stats_time_dt, latest_stat = max(
+                        existing_stats, key=lambda item: item[0]
+                    )
+                    _sum = latest_stat.get("sum", 0.0) or 0.0
 
             statistics = []
-            last_stats_time_dt = (
-                dt_util.utc_from_timestamp(last_stats_time) if last_stats_time else None
-            )
 
-            for data in sorted_data:
-                dt_str = data["startDate"].replace("+00:00", ".000Z")
-                if dt_str.endswith("Z"):
-                    dt_str = dt_str[:-1] + "+00:00"
-                start_time = dt_util.parse_datetime(dt_str)
-
-                if start_time is None or (
-                    last_stats_time_dt is not None and start_time <= last_stats_time_dt
-                ):
+            for start_time, data in parsed_data:
+                if last_stats_time_dt is not None and start_time <= last_stats_time_dt:
                     continue
 
                 usage = data.get("usage", 0.0)
                 if is_cost:
-                    timestamp = data.get("startDate", "").replace("+00:00", ".000Z")
-                    price_cents = p_map.get(timestamp, 0.0)
+                    timestamp = _normalize_api_datetime_key(data.get("startDate"))
+                    price_cents = p_map.get(timestamp, 0.0) if timestamp else 0.0
                     val = (usage * price_cents) / 100.0
                 else:
                     val = usage

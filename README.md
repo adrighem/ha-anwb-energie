@@ -10,7 +10,7 @@ A custom component for Home Assistant that natively integrates your ANWB Energie
 *   **Native Energy Dashboard Support:** Seamlessly integrates with the built-in Home Assistant Energy dashboard.
 *   **Hourly & Daily Statistics:** Import and export usage and costs are automatically added to Long-Term Statistics.
 *   **Current Dynamic Price Sensor:** Provides the current hourly electricity price, along with today's and tomorrow's prices as attributes for charting (e.g., via ApexCharts).
-*   **Monthly & Yearly Overviews:** Dedicated sensors for your current month and year totals.
+*   **Month-to-Date & Year-to-Date Overviews:** Dedicated sensors for current month and year totals.
 *   **Diagnostics Support:** Download redacted diagnostics natively from the UI to easily share bug reports.
 *   **Official Translation Support:** Fully supports English and Dutch seamlessly through Home Assistant's translation engine.
 
@@ -18,13 +18,30 @@ A custom component for Home Assistant that natively integrates your ANWB Energie
 
 To configure the built-in Home Assistant Energy Dashboard with your ANWB Energie data, navigate to **Settings** -> **Dashboards** -> **Energy** and configure the "Electricity grid" section using these specific sensors:
 
-*   **Grid consumption:** `Yearly import usage` (e.g., `sensor.anwb_account_..._jaarlijks_importverbruik`)
-*   **Return to grid:** `Yearly export usage` (e.g., `sensor.anwb_account_..._jaarlijks_exportverbruik`)
-*   **Track costs:** Select **"Use an entity with current price"** for both import and export, and choose the `Current electricity price` sensor (e.g., `sensor.anwb_account_..._huidige_elektriciteitsprijs`).
+*   **Grid consumption:** `Electricity import year to date`
+*   **Return to grid:** `Electricity export year to date`
+*   **Track costs:** Select **"Use an entity with current price"** for both import and export, and choose the `Electricity current price` sensor.
 
-*(Do not use the monthly totals or monthly cost sensors in the Energy Dashboard configuration.)*
+*(Do not use the month-to-date totals or month-to-date cost sensors in the Energy Dashboard configuration.)*
 
 > **⚠️ Note:** After installing the integration, it can take up to two hours for Home Assistant to generate the initial statistics. The sensors may not appear in the Energy Dashboard dropdown menus immediately. If they are missing, please wait a while and try again.
+
+## Entity Model
+
+New installs expose explicitly named electricity and gas entities, such as
+`Electricity import year to date`, `Electricity import month to date`, `Gas usage
+year to date`, and `Gas current price`.
+
+Older entity names such as `Yearly import usage`, `Monthly import usage`, and
+`Current electricity price` are kept for compatibility, but are disabled by
+default for newly created entity registry entries. Existing enabled entities are
+not disabled during upgrades.
+
+Cost sensors are tariff-estimated values. Authenticated API verification showed
+that the account cache contains `variabeleKosten` and `vasteKosten` fields, but
+those fields were zero even for non-zero usage. The integration therefore uses
+account-cache usage together with public hourly tariff data for variable cost
+calculations.
 
 ## Example Dashboards
 

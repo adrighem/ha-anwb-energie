@@ -20,9 +20,154 @@ from homeassistant.helpers.event import async_track_time_change
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
-from .coordinator import ANWBBaseCoordinator, ANWBEnergieAccountConfigEntry
+from .coordinator import (
+    ANWBBaseCoordinator,
+    ANWBEnergieAccountConfigEntry,
+    _normalize_api_datetime_key,
+)
+
+ELECTRICITY_PRICE_KEYS = {"current_price", "electricity_current_price"}
+GAS_PRICE_KEYS = {"current_gas_price", "gas_current_price"}
+PRICE_SENSOR_KEYS = ELECTRICITY_PRICE_KEYS | GAS_PRICE_KEYS
+
+LEGACY_SENSOR_KEYS = {
+    "import_usage",
+    "export_usage",
+    "import_cost",
+    "export_cost",
+    "yearly_import_usage",
+    "yearly_export_usage",
+    "fixed_cost",
+    "total_cost",
+    "current_price",
+    "gas_usage",
+    "gas_cost",
+    "yearly_gas_usage",
+    "fixed_cost_gas",
+    "total_cost_gas",
+    "current_gas_price",
+}
+
+SENSOR_DATA_KEYS = {
+    "import_usage": "electricity_import_month_to_date",
+    "export_usage": "electricity_export_month_to_date",
+    "import_cost": "electricity_import_month_to_date_cost",
+    "export_cost": "electricity_export_month_to_date_credit",
+    "yearly_import_usage": "electricity_import_year_to_date",
+    "yearly_export_usage": "electricity_export_year_to_date",
+    "fixed_cost": "electricity_month_to_date_fixed_cost",
+    "total_cost": "electricity_month_to_date_total_cost",
+    "gas_usage": "gas_month_to_date",
+    "gas_cost": "gas_month_to_date_cost",
+    "yearly_gas_usage": "gas_year_to_date",
+    "fixed_cost_gas": "gas_month_to_date_fixed_cost",
+    "total_cost_gas": "gas_month_to_date_total_cost",
+}
 
 SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
+    SensorEntityDescription(
+        key="electricity_import_month_to_date",
+        translation_key="electricity_import_month_to_date",
+        device_class=SensorDeviceClass.ENERGY,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+    ),
+    SensorEntityDescription(
+        key="electricity_export_month_to_date",
+        translation_key="electricity_export_month_to_date",
+        device_class=SensorDeviceClass.ENERGY,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+    ),
+    SensorEntityDescription(
+        key="electricity_import_month_to_date_cost",
+        translation_key="electricity_import_month_to_date_cost",
+        device_class=SensorDeviceClass.MONETARY,
+        native_unit_of_measurement=CURRENCY_EURO,
+        state_class=SensorStateClass.TOTAL,
+    ),
+    SensorEntityDescription(
+        key="electricity_export_month_to_date_credit",
+        translation_key="electricity_export_month_to_date_credit",
+        device_class=SensorDeviceClass.MONETARY,
+        native_unit_of_measurement=CURRENCY_EURO,
+        state_class=SensorStateClass.TOTAL,
+    ),
+    SensorEntityDescription(
+        key="electricity_import_year_to_date",
+        translation_key="electricity_import_year_to_date",
+        device_class=SensorDeviceClass.ENERGY,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+    ),
+    SensorEntityDescription(
+        key="electricity_export_year_to_date",
+        translation_key="electricity_export_year_to_date",
+        device_class=SensorDeviceClass.ENERGY,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+    ),
+    SensorEntityDescription(
+        key="electricity_month_to_date_fixed_cost",
+        translation_key="electricity_month_to_date_fixed_cost",
+        device_class=SensorDeviceClass.MONETARY,
+        native_unit_of_measurement=CURRENCY_EURO,
+        state_class=SensorStateClass.TOTAL,
+    ),
+    SensorEntityDescription(
+        key="electricity_month_to_date_total_cost",
+        translation_key="electricity_month_to_date_total_cost",
+        device_class=SensorDeviceClass.MONETARY,
+        native_unit_of_measurement=CURRENCY_EURO,
+        state_class=SensorStateClass.TOTAL,
+    ),
+    SensorEntityDescription(
+        key="electricity_current_price",
+        translation_key="electricity_current_price",
+        native_unit_of_measurement=f"{CURRENCY_EURO}/{UnitOfEnergy.KILO_WATT_HOUR}",
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key="gas_month_to_date",
+        translation_key="gas_month_to_date",
+        device_class=SensorDeviceClass.GAS,
+        native_unit_of_measurement=UnitOfVolume.CUBIC_METERS,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+    ),
+    SensorEntityDescription(
+        key="gas_month_to_date_cost",
+        translation_key="gas_month_to_date_cost",
+        device_class=SensorDeviceClass.MONETARY,
+        native_unit_of_measurement=CURRENCY_EURO,
+        state_class=SensorStateClass.TOTAL,
+    ),
+    SensorEntityDescription(
+        key="gas_year_to_date",
+        translation_key="gas_year_to_date",
+        device_class=SensorDeviceClass.GAS,
+        native_unit_of_measurement=UnitOfVolume.CUBIC_METERS,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+    ),
+    SensorEntityDescription(
+        key="gas_month_to_date_fixed_cost",
+        translation_key="gas_month_to_date_fixed_cost",
+        device_class=SensorDeviceClass.MONETARY,
+        native_unit_of_measurement=CURRENCY_EURO,
+        state_class=SensorStateClass.TOTAL,
+    ),
+    SensorEntityDescription(
+        key="gas_month_to_date_total_cost",
+        translation_key="gas_month_to_date_total_cost",
+        device_class=SensorDeviceClass.MONETARY,
+        native_unit_of_measurement=CURRENCY_EURO,
+        state_class=SensorStateClass.TOTAL,
+    ),
+    SensorEntityDescription(
+        key="gas_current_price",
+        translation_key="gas_current_price",
+        native_unit_of_measurement=f"{CURRENCY_EURO}/{UnitOfVolume.CUBIC_METERS}",
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
     SensorEntityDescription(
         key="import_usage",
         translation_key="import_usage",
@@ -139,7 +284,7 @@ async def async_setup_entry(
 
     entities = []
     for description in SENSOR_TYPES:
-        if description.key in ("current_price", "current_gas_price"):
+        if description.key in PRICE_SENSOR_KEYS:
             entities.append(ANWBEnergieAccountSensor(data.pricing, description))
         else:
             entities.append(ANWBEnergieAccountSensor(data.consumption, description))
@@ -163,6 +308,9 @@ class ANWBEnergieAccountSensor(CoordinatorEntity[ANWBBaseCoordinator], SensorEnt
         account_number = coordinator.data.get("account_number", "unknown")
         account_address = coordinator.data.get("account_address")
         self._attr_unique_id = f"{account_number}_{description.key}"
+        self._attr_entity_registry_enabled_default = (
+            description.key not in LEGACY_SENSOR_KEYS
+        )
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, account_number)},
             name=f"ANWB Account {account_number}",
@@ -177,7 +325,7 @@ class ANWBEnergieAccountSensor(CoordinatorEntity[ANWBBaseCoordinator], SensorEnt
         """Run when entity about to be added."""
         await super().async_added_to_hass()
 
-        if self.entity_description.key in ("current_price", "current_gas_price"):
+        if self.entity_description.key in PRICE_SENSOR_KEYS:
             # Trigger a state update exactly on the hour (XX:00:00)
             self.async_on_remove(
                 async_track_time_change(
@@ -196,27 +344,30 @@ class ANWBEnergieAccountSensor(CoordinatorEntity[ANWBBaseCoordinator], SensorEnt
         if self.coordinator.data is None:
             return None
 
-        if self.entity_description.key == "current_price":
-            now = dt_util.utcnow()
-            current_hour_str = now.replace(minute=0, second=0, microsecond=0).strftime(
-                "%Y-%m-%dT%H:00:00.000Z"
+        if self.entity_description.key in ELECTRICITY_PRICE_KEYS:
+            current_hour_str = _normalize_api_datetime_key(
+                dt_util.utcnow().isoformat()
             )
             prices = self.coordinator.data.get("prices_today", {})
             if current_hour_str in prices:
                 return round(prices[current_hour_str] / 100.0, 4)
             return None
 
-        if self.entity_description.key == "current_gas_price":
-            now = dt_util.utcnow()
-            current_hour_str = now.replace(minute=0, second=0, microsecond=0).strftime(
-                "%Y-%m-%dT%H:00:00.000Z"
+        if self.entity_description.key in GAS_PRICE_KEYS:
+            current_hour_str = _normalize_api_datetime_key(
+                dt_util.utcnow().isoformat()
             )
             prices = self.coordinator.data.get("gas_prices_today", {})
             if current_hour_str in prices:
                 return round(prices[current_hour_str] / 100.0, 4)
             return None
 
-        val = self.coordinator.data.get(self.entity_description.key)
+        data_key = SENSOR_DATA_KEYS.get(
+            self.entity_description.key, self.entity_description.key
+        )
+        val = self.coordinator.data.get(data_key)
+        if val is None and data_key != self.entity_description.key:
+            val = self.coordinator.data.get(self.entity_description.key)
         if val is None:
             return None
         return round(val, 2)
@@ -225,7 +376,7 @@ class ANWBEnergieAccountSensor(CoordinatorEntity[ANWBBaseCoordinator], SensorEnt
     def extra_state_attributes(self) -> dict[str, Any] | None:
         """Return the state attributes."""
         if self.coordinator.data:
-            if self.entity_description.key == "current_price":
+            if self.entity_description.key in ELECTRICITY_PRICE_KEYS:
                 prices = self.coordinator.data.get("prices_today", {})
                 return {
                     "prices": [
@@ -233,7 +384,7 @@ class ANWBEnergieAccountSensor(CoordinatorEntity[ANWBBaseCoordinator], SensorEnt
                         for k, v in prices.items()
                     ]
                 }
-            elif self.entity_description.key == "current_gas_price":
+            elif self.entity_description.key in GAS_PRICE_KEYS:
                 prices = self.coordinator.data.get("gas_prices_today", {})
                 return {
                     "prices": [

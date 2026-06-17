@@ -1,22 +1,53 @@
 openapi: 3.1.0
 info:
   title: ANWB Energie API
-  version: 1.1.0
+  version: 1.2.0
   description: >
-    Undocumented internal APIs used by the ANWB Energie portal and mobile app to fetch dynamic prices, contracts, and consumption data.
-    This API is built on top of the Kraken/EnergyZero platforms and requires OAuth 2.0 authentication.
+    Unofficial OpenAPI map for the undocumented APIs used by ANWB Energie.
+    The Home Assistant integration currently uses OAuth 2.0 PKCE, exchanges the
+    resulting ANWB access token for a Kraken bearer token, reads account metadata
+    through Kraken GraphQL, reads consumption/production through the ANWB Energy
+    Services account cache endpoints, and reads dynamic tariffs from public ANWB
+    tariff endpoints.
+
+    This specification is based on the integration code plus unauthenticated
+    endpoint probes performed on 2026-06-15. Customer account and consumption
+    responses still require a valid user token and their full schema should be
+    treated as partially inferred.
 servers:
   - url: https://api.anwb.nl
-    description: Main ANWB Services API (Legacy REST)
-  - url: https://api.anwb-kraken.energy
-    description: Kraken GraphQL API (New Platform)
-  - url: https://login.anwb.nl
-    description: Authentication API
+    description: ANWB Energy Services API
+
+tags:
+  - name: Authentication
+  - name: Account
+  - name: Consumption
+  - name: Prices
+  - name: Legacy
+
+x-anwb-verification:
+  checked_at: "2026-06-15"
+  notes:
+    - Public tariff endpoints returned HTTP 200 without an Authorization header.
+    - Account cache and legacy account endpoints returned HTTP 401 without an Authorization header.
+    - Kraken GraphQL allows introspection without Authorization, but viewer/customer data requires Authorization.
+    - Authenticated kraken-token returned HTTP 201 with accessToken and expiresIn.
+    - Authenticated account cache responses include interval, unit, startDate, endDate, hasGap, usage, vasteKosten, and variabeleKosten.
+    - Authenticated account cache HOUR and MONTH responses observed unit values kWh for electricity/production and m3 for gas.
+    - Authenticated electricity/production cache rows observed non-zero usage with hasGap true; hasGap should not be treated as "ignore this row" without further evidence.
+    - Authenticated electricity/production cache rows observed on 2026-06-15 returned variabeleKosten and vasteKosten fields, but all cost components were zero for both HOUR and MONTH rows, including rows/months with material non-zero usage. Tariff endpoints produced non-zero cost calculations for the same hours.
+    - Follow-up authenticated probe on 2026-06-17 checked yesterday, last week, previous month, closed current-year months, and previous calendar-year rows across HOUR, DAY, and MONTH intervals where supported. All variabeleKosten.total and vasteKosten.total values were zero, including non-zero electricity/production usage windows. This argues against simple delayed backfill or DAY/MONTH-only population for the verified account.
+    - Do not treat cache cost fields as authoritative billing values without re-verifying non-zero values and their unit/accounting semantics.
+    - Authenticated gas cache returned HTTP 200 with an empty data array for an account without gas.
+    - Authenticated legacy bills returned HTTP 200 for the verified account; legacy payments returned HTTP 500.
+    - Kraken GraphQL SupplyPointType.readings requires readingType ReadingTypes; observed enum values are INTERVAL, ACCUMULATION, and PEAK.
+    - /energy/energy-services/v2/tarieven/electricity-prices returned HTTP 404 and is intentionally omitted.
 
 components:
   securitySchemes:
     OAuth2:
       type: oauth2
+      description: ANWB OAuth 2.0 / OpenID Connect authorization-code flow with PKCE.
       flows:
         authorizationCode:
           authorizationUrl: https://login.anwb.nl/49acae90-1d8b-46a5-943a-33da44624219/login/authorize
@@ -25,84 +56,471 @@ components:
             openid: OpenID Connect
             profile: Profile information
             email: Email address
-            offline_access: Offline Access
+            offline_access: Refresh token access
     KrakenToken:
       type: http
       scheme: bearer
       bearerFormat: JWT
-      description: The token obtained from the `/energy/energy-services/v1/auth/kraken-token` endpoint.
+      description: >
+        Kraken bearer token returned by
+        /energy/energy-services/v1/auth/kraken-token. The integration sends this
+        token to Kraken GraphQL and authenticated ANWB Energy Services endpoints.
 
-security:
-  - KrakenToken: []
+  parameters:
+    AccountNumber:
+      in: path
+      name: account_number
+      required: true
+      schema:
+        type: string
+      description: ANWB/Kraken account number, discovered via GraphQL viewer.accounts.
+    StartDateTime:
+      in: query
+      name: startDate
+      required: true
+      schema:
+        type: string
+        format: date-time
+      description: Inclusive start timestamp.
+    EndDateTime:
+      in: query
+      name: endDate
+      required: true
+      schema:
+        type: string
+        format: date-time
+      description: Inclusive end timestamp.
+    ContractStartDate:
+      in: query
+      name: contractStartDate
+      required: true
+      schema:
+        type: string
+        format: date-time
+      description: Contract start timestamp used by account cache aggregation.
+    CacheInterval:
+      in: query
+      name: interval
+      required: true
+      schema:
+        type: string
+        enum:
+          - HOUR
+          - DAY
+          - MONTH
+          - YEAR
+      description: Cache aggregation interval. The integration currently uses HOUR and MONTH.
+    TariffInterval:
+      in: query
+      name: interval
+      required: true
+      schema:
+        type: string
+        enum:
+          - HOUR
+          - DAY
+      description: >
+        Tariff aggregation interval. HOUR returned data for electricity and gas
+        during verification; DAY returned an empty array for the tested v2 ranges.
+
+  schemas:
+    ErrorResponse:
+      type: object
+      additionalProperties: true
+      properties:
+        message:
+          type: string
+        statusCode:
+          type: integer
+        request_id:
+          type: string
+
+    OpenIdConfiguration:
+      type: object
+      additionalProperties: true
+      properties:
+        issuer:
+          type: string
+          format: uri
+        authorization_endpoint:
+          type: string
+          format: uri
+        token_endpoint:
+          type: string
+          format: uri
+        introspection_endpoint:
+          type: string
+          format: uri
+        revocation_endpoint:
+          type: string
+          format: uri
+        userinfo_endpoint:
+          type: string
+          format: uri
+        jwks_uri:
+          type: string
+          format: uri
+
+    OAuthTokenResponse:
+      type: object
+      additionalProperties: true
+      properties:
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+        id_token:
+          type: string
+        token_type:
+          type: string
+        scope:
+          type: string
+        expires_in:
+          type: integer
+
+    KrakenTokenResponse:
+      type: object
+      additionalProperties: true
+      required:
+        - accessToken
+      properties:
+        accessToken:
+          type: string
+          description: Bearer token for Kraken GraphQL and ANWB Energy Services.
+        expiresIn:
+          type: integer
+          description: Kraken token lifetime in seconds.
+
+    GraphQLRequest:
+      type: object
+      required:
+        - query
+      additionalProperties: true
+      properties:
+        query:
+          type: string
+        variables:
+          type: object
+          additionalProperties: true
+
+    GraphQLResponse:
+      type: object
+      additionalProperties: true
+      properties:
+        data:
+          type:
+            - object
+            - "null"
+          additionalProperties: true
+        errors:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+
+    TariffValues:
+      type: object
+      additionalProperties: true
+      properties:
+        marktprijs:
+          type: number
+          description: Market price in euro cents.
+        allInPrijs:
+          type: number
+          description: All-in price including taxes, in euro cents.
+
+    TariffPoint:
+      type: object
+      additionalProperties: true
+      properties:
+        date:
+          type: string
+          format: date-time
+        values:
+          $ref: "#/components/schemas/TariffValues"
+
+    TariffResponse:
+      type: object
+      additionalProperties: true
+      properties:
+        interval:
+          type: string
+          enum:
+            - HOUR
+            - DAY
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/TariffPoint"
+
+    FixedCosts:
+      type: object
+      description: >
+        Fixed-cost fields returned inside account cache rows. These fields were
+        present during authenticated verification, but observed as zero for HOUR
+        and MONTH electricity/production rows with non-zero usage. Consumers
+        should not rely on these as authoritative billing values unless future
+        verification proves they are populated for the target account/contract.
+      additionalProperties: true
+      properties:
+        abonnementsKosten:
+          type: number
+        netbeheerKosten:
+          type: number
+        verminderingEnergieBelasting:
+          type: number
+        total:
+          type: number
+
+    VariableCosts:
+      type: object
+      description: >
+        Variable-cost fields returned inside account cache rows. These fields
+        were present during authenticated verification, but observed as zero for
+        HOUR and MONTH electricity/production rows with non-zero usage. The Home
+        Assistant integration therefore computes variable costs from the public
+        hourly tariff endpoints instead of using variabeleKosten.total.
+      additionalProperties: true
+      properties:
+        dynamischeKosten:
+          type: number
+        energieBelasting1:
+          type: number
+        energieBelasting2:
+          type: number
+        energieBelasting3:
+          type: number
+        inkoopKosten:
+          type: number
+        total:
+          type: number
+
+    UsageCacheEntry:
+      type: object
+      additionalProperties: true
+      properties:
+        startDate:
+          type: string
+          format: date-time
+        endDate:
+          type: string
+          format: date-time
+        hasGap:
+          type: boolean
+          description: >
+            Gap marker returned by the cache endpoint. Verified rows with
+            non-zero usage also had hasGap true, so this should not by itself be
+            interpreted as "discard this sample".
+        usage:
+          type: number
+        vasteKosten:
+          $ref: "#/components/schemas/FixedCosts"
+        variabeleKosten:
+          $ref: "#/components/schemas/VariableCosts"
+
+    UsageCacheResponse:
+      type: object
+      additionalProperties: true
+      properties:
+        interval:
+          type: string
+          enum:
+            - HOUR
+            - DAY
+            - MONTH
+            - YEAR
+        unit:
+          type: string
+          description: Observed values include kWh for electricity/production and m3 for gas.
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/UsageCacheEntry"
+
+    LegacyBill:
+      type: object
+      additionalProperties: true
+      properties:
+        id:
+          type: string
+        identifier:
+          type: string
+        issuedDate:
+          type: string
+          format: date-time
+        grossAmount:
+          type: number
+        pdfUrl:
+          type: string
+          format: uri
+
+    LegacyBillsResponse:
+      type: object
+      additionalProperties: true
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/LegacyBill"
 
 paths:
-  /49acae90-1d8b-46a5-943a-33da44624219/login/authorize:
+  /49acae90-1d8b-46a5-943a-33da44624219/login/.well-known/openid-configuration:
     get:
-      summary: OAuth 2.0 Authorization
+      servers:
+        - url: https://login.anwb.nl
+      summary: OpenID Connect discovery
       tags:
         - Authentication
       security: []
       responses:
-        '302':
-          description: Redirect to login page
-
-  /49acae90-1d8b-46a5-943a-33da44624219/login/token:
-    post:
-      summary: OAuth 2.0 Token Exchange
-      tags:
-        - Authentication
-      security: []
-      responses:
-        '200':
-          description: Returns standard OAuth 2.0 Access and Refresh tokens
-
-  /energy/energy-services/v1/auth/kraken-token:
-    post:
-      summary: Exchange ANWB OAuth token for Kraken Token
-      description: Exchanges the ANWB standard OAuth2 access token for a Kraken platform-specific access token.
-      tags:
-        - Authentication
-      security:
-        - OAuth2: [openid, profile, email, offline_access]
-      responses:
-        '200':
-          description: Successful exchange
+        "200":
+          description: OpenID Connect provider metadata.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  accessToken:
-                    type: string
-                    description: The token to use for Kraken and Energy Services API endpoints.
+                $ref: "#/components/schemas/OpenIdConfiguration"
+
+  /49acae90-1d8b-46a5-943a-33da44624219/login/authorize:
+    get:
+      servers:
+        - url: https://login.anwb.nl
+      summary: OAuth 2.0 authorization endpoint
+      tags:
+        - Authentication
+      security: []
+      parameters:
+        - in: query
+          name: client_id
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: redirect_uri
+          required: true
+          schema:
+            type: string
+            format: uri
+        - in: query
+          name: response_type
+          required: true
+          schema:
+            type: string
+            enum:
+              - code
+        - in: query
+          name: scope
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: code_challenge
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: code_challenge_method
+          required: true
+          schema:
+            type: string
+            enum:
+              - S256
+        - in: query
+          name: prompt
+          schema:
+            type: string
+      responses:
+        "302":
+          description: Redirect to login and authorization flow.
+
+  /49acae90-1d8b-46a5-943a-33da44624219/login/token:
+    post:
+      servers:
+        - url: https://login.anwb.nl
+      summary: OAuth 2.0 token endpoint
+      tags:
+        - Authentication
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              additionalProperties: true
+              properties:
+                client_id:
+                  type: string
+                grant_type:
+                  type: string
+                  enum:
+                    - authorization_code
+                    - refresh_token
+                code:
+                  type: string
+                redirect_uri:
+                  type: string
+                  format: uri
+                code_verifier:
+                  type: string
+                refresh_token:
+                  type: string
+      responses:
+        "200":
+          description: OAuth token response.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OAuthTokenResponse"
+
+  /energy/energy-services/v1/auth/kraken-token:
+    post:
+      summary: Exchange ANWB OAuth token for Kraken token
+      description: >
+        Exchanges an ANWB OAuth access token for a Kraken access token. A request
+        without Authorization returned HTTP 401 during verification.
+      tags:
+        - Authentication
+      security:
+        - OAuth2:
+            - openid
+            - profile
+            - email
+            - offline_access
+      responses:
+        "201":
+          description: Kraken token response.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KrakenTokenResponse"
+        "401":
+          description: Missing or invalid ANWB OAuth token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /v1/graphql/:
     post:
       servers:
         - url: https://api.anwb-kraken.energy
-      summary: Kraken GraphQL API
-      description: Main GraphQL endpoint for retrieving account information, properties, ledgers, and supply points on the new Kraken backend.
+      summary: Kraken GraphQL endpoint
+      description: >
+        Main Kraken GraphQL endpoint. Introspection works without Authorization,
+        but viewer/account/supply data requires a Kraken bearer token.
       tags:
-        - Account (Kraken)
+        - Account
+      security:
+        - KrakenToken: []
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                query:
-                  type: string
-                  description: |
-                    Supported Query Roots:
-                    - `viewer { accounts { number properties { address energyMeterPoints { ean agreements } } } }`
-                    - `supplyPoint(externalIdentifier: String!, marketName: String!) { readings(startAt: DateTime!, endAt: DateTime!, readingType: ReadingTypes!) { importReadings { edges { node { value intervalStart intervalEnd } } } } }`
-                    - `viewer { accounts { ... on AccountType { ledgers { number paymentAdequacy { suggestedNewMonthlyAmount consumption { edges { node { charges } } } } statements provisionalTransactions } } } }`
-                variables:
-                  type: object
+              $ref: "#/components/schemas/GraphQLRequest"
             examples:
               AccountInfo:
-                summary: Get Account Number and Address
+                summary: Account number and property address used by the integration
                 value:
                   query: |
                     {
@@ -118,306 +536,270 @@ paths:
                       }
                     }
                   variables: {}
-              AccountLedgers:
-                summary: Get Ledgers and Charges
+              SupplyPointReadings:
+                summary: Kraken supply point readings query shape
                 value:
                   query: |
-                    {
-                      viewer {
-                        accounts {
-                          number
-                          ... on AccountType {
-                            ledgers {
-                              number
-                              paymentAdequacy {
-                                suggestedNewMonthlyAmount
-                                consumption(first: 5) {
-                                  edges {
-                                    node {
-                                      marketName
-                                      charges(first: 5) {
-                                        edges {
-                                          node {
-                                            periodStart
-                                            periodEnd
-                                            charge
-                                          }
-                                        }
-                                      }
-                                    }
-                                  }
-                                }
+                    query Readings($externalIdentifier: String!, $marketName: String!, $startAt: DateTime!, $endAt: DateTime!) {
+                      supplyPoint(externalIdentifier: $externalIdentifier, marketName: $marketName) {
+                        externalIdentifier
+                        marketName
+                        readings(startAt: $startAt, endAt: $endAt, readingType: INTERVAL, timeGranularity: HOUR, units: [KILOWATT_HOURS]) {
+                          importReadings {
+                            edges {
+                              node {
+                                __typename
                               }
                             }
                           }
                         }
                       }
                     }
-                  variables: {}
+                  variables:
+                    externalIdentifier: "EAN_OR_METER_POINT"
+                    marketName: "ELECTRICITY"
+                    startAt: "2026-06-01T00:00:00+02:00"
+                    endAt: "2026-06-02T00:00:00+02:00"
       responses:
-        '200':
-          description: GraphQL Response
+        "200":
+          description: GraphQL response. Authorization errors are returned as GraphQL errors with HTTP 200.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  data:
-                    type: object
-
-  /energy/energy-services/v0/accounts/{account_number}/bills:
-    get:
-      summary: Get Historical Bills
-      description: Retrieve legacy bill statements. Note - migrated Kraken users may receive 401 AE-102 errors here and should use the GraphQL ledgers.statements query.
-      tags:
-        - Account (Legacy)
-      parameters:
-        - in: path
-          name: account_number
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: List of bills
-
-  /energy/energy-services/v0/accounts/{account_number}/payments:
-    get:
-      summary: Get Account Payments
-      description: Retrieve legacy payment records. Note - migrated Kraken users may receive 401 AE-102 errors here.
-      tags:
-        - Account (Legacy)
-      parameters:
-        - in: path
-          name: account_number
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: List of payments
+                $ref: "#/components/schemas/GraphQLResponse"
 
   /energy/energy-services/v1/accounts/{account_number}/electricity/cache:
     get:
-      summary: Get Electricity Consumption (Import)
-      description: Retrieve historical electricity consumption and associated fixed costs. Note - migrated Kraken users receive 401 AE-102 here and must use GraphQL supplyPoint readings.
+      summary: Electricity import cache
+      description: >
+        Historical electricity consumption/import values for an account. The
+        integration queries HOUR for current-month statistics and MONTH for
+        year-to-date totals.
       tags:
-        - Energy Data (Legacy)
+        - Consumption
+      security:
+        - KrakenToken: []
       parameters:
-        - in: path
-          name: account_number
-          required: true
-          schema:
-            type: string
-        - in: query
-          name: startDate
-          required: true
-          schema:
-            type: string
-            format: date-time
-        - in: query
-          name: endDate
-          required: true
-          schema:
-            type: string
-            format: date-time
-        - in: query
-          name: contractStartDate
-          required: true
-          schema:
-            type: string
-            format: date-time
-        - in: query
-          name: interval
-          required: true
-          schema:
-            type: string
-            enum: [HOUR, DAY, MONTH, YEAR]
+        - $ref: "#/components/parameters/AccountNumber"
+        - $ref: "#/components/parameters/StartDateTime"
+        - $ref: "#/components/parameters/EndDateTime"
+        - $ref: "#/components/parameters/ContractStartDate"
+        - $ref: "#/components/parameters/CacheInterval"
       responses:
-        '200':
-          description: Electricity usage data
+        "200":
+          description: Electricity import cache data.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  data:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        startDate:
-                          type: string
-                          format: date-time
-                        usage:
-                          type: number
-                        vasteKosten:
-                          type: object
+                $ref: "#/components/schemas/UsageCacheResponse"
+        "401":
+          description: Missing or invalid Kraken token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /energy/energy-services/v1/accounts/{account_number}/production/cache:
     get:
-      summary: Get Electricity Production (Export)
-      description: Retrieve historical electricity production (solar export). Legacy endpoint.
+      summary: Electricity export/production cache
+      description: >
+        Historical electricity production/export values for an account. The
+        integration queries HOUR for current-month statistics and MONTH for
+        year-to-date totals.
       tags:
-        - Energy Data (Legacy)
+        - Consumption
+      security:
+        - KrakenToken: []
       parameters:
-        - in: path
-          name: account_number
-          required: true
-          schema:
-            type: string
-        - in: query
-          name: startDate
-          required: true
-          schema:
-            type: string
-            format: date-time
-        - in: query
-          name: endDate
-          required: true
-          schema:
-            type: string
-            format: date-time
-        - in: query
-          name: contractStartDate
-          required: true
-          schema:
-            type: string
-            format: date-time
-        - in: query
-          name: interval
-          required: true
-          schema:
-            type: string
-            enum: [HOUR, DAY, MONTH, YEAR]
+        - $ref: "#/components/parameters/AccountNumber"
+        - $ref: "#/components/parameters/StartDateTime"
+        - $ref: "#/components/parameters/EndDateTime"
+        - $ref: "#/components/parameters/ContractStartDate"
+        - $ref: "#/components/parameters/CacheInterval"
       responses:
-        '200':
-          description: Electricity production data
+        "200":
+          description: Electricity export/production cache data.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsageCacheResponse"
+        "401":
+          description: Missing or invalid Kraken token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /energy/energy-services/v1/accounts/{account_number}/gas/cache:
     get:
-      summary: Get Gas Consumption
-      description: Retrieve historical gas consumption. Legacy endpoint.
+      summary: Gas consumption cache
+      description: >
+        Historical gas consumption values for an account. The integration queries
+        HOUR for current-month statistics and MONTH for year-to-date totals. During
+        authenticated verification, an account without gas returned HTTP 200 with
+        an empty data array. The integration also treats 404 as an empty response.
       tags:
-        - Energy Data (Legacy)
+        - Consumption
+      security:
+        - KrakenToken: []
       parameters:
-        - in: path
-          name: account_number
-          required: true
-          schema:
-            type: string
-        - in: query
-          name: startDate
-          required: true
-          schema:
-            type: string
-            format: date-time
-        - in: query
-          name: endDate
-          required: true
-          schema:
-            type: string
-            format: date-time
-        - in: query
-          name: contractStartDate
-          required: true
-          schema:
-            type: string
-            format: date-time
-        - in: query
-          name: interval
-          required: true
-          schema:
-            type: string
-            enum: [HOUR, DAY, MONTH, YEAR]
+        - $ref: "#/components/parameters/AccountNumber"
+        - $ref: "#/components/parameters/StartDateTime"
+        - $ref: "#/components/parameters/EndDateTime"
+        - $ref: "#/components/parameters/ContractStartDate"
+        - $ref: "#/components/parameters/CacheInterval"
       responses:
-        '200':
-          description: Gas usage data
-
-  /energy/energy-services/v0/tarieven/electricity/actueel:
-    get:
-      summary: Get Current Electricity Price
-      description: Retrieve the current actual electricity price including taxes.
-      tags:
-        - Prices
-      responses:
-        '200':
-          description: Current electricity price
-
-  /energy/energy-services/v0/tarieven/gas/actueel:
-    get:
-      summary: Get Current Gas Price
-      description: Retrieve the current actual gas price including taxes.
-      tags:
-        - Prices
-      responses:
-        '200':
-          description: Current gas price
+        "200":
+          description: Gas cache data. Accounts without gas may return an empty data array.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsageCacheResponse"
+        "401":
+          description: Missing or invalid Kraken token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: No gas data for this account.
 
   /energy/energy-services/v2/tarieven/electricity:
     get:
-      summary: Get Electricity Prices (Tarieven v2)
-      description: Retrieve dynamic hourly electricity prices applicable to the user's contract.
+      summary: Dynamic electricity tariffs
+      description: >
+        Public dynamic electricity tariff endpoint. The integration queries this
+        endpoint with interval=HOUR and divides allInPrijs by 100 to expose EUR/kWh.
       tags:
         - Prices
+      security: []
       parameters:
-        - in: query
-          name: startDate
-          required: true
-          schema:
-            type: string
-            format: date-time
-        - in: query
-          name: endDate
-          required: true
-          schema:
-            type: string
-            format: date-time
-        - in: query
-          name: interval
-          required: true
-          schema:
-            type: string
-            enum: [HOUR, DAY]
+        - $ref: "#/components/parameters/StartDateTime"
+        - $ref: "#/components/parameters/EndDateTime"
+        - $ref: "#/components/parameters/TariffInterval"
       responses:
-        '200':
-          description: Dynamic price data
+        "200":
+          description: Electricity tariff data.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TariffResponse"
+
+  /energy/energy-services/v2/tarieven/gas:
+    get:
+      summary: Dynamic gas tariffs
+      description: >
+        Public dynamic gas tariff endpoint. The integration queries this endpoint
+        with interval=HOUR and divides allInPrijs by 100 to expose EUR/m³. During
+        verification, interval=HOUR returned hourly-expanded values and interval=DAY
+        returned an empty array for the tested range.
+      tags:
+        - Prices
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/StartDateTime"
+        - $ref: "#/components/parameters/EndDateTime"
+        - $ref: "#/components/parameters/TariffInterval"
+      responses:
+        "200":
+          description: Gas tariff data.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TariffResponse"
+
+  /energy/energy-services/v0/tarieven/electricity/actueel:
+    get:
+      summary: Current electricity tariff series
+      description: >
+        Public legacy tariff endpoint. Despite the "actueel" name, it returned a
+        HOUR tariff series during verification.
+      tags:
+        - Prices
+        - Legacy
+      security: []
+      responses:
+        "200":
+          description: Electricity tariff series.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TariffResponse"
+
+  /energy/energy-services/v0/tarieven/gas/actueel:
+    get:
+      summary: Current gas tariff
+      description: Public legacy tariff endpoint. It returned one DAY tariff point during verification.
+      tags:
+        - Prices
+        - Legacy
+      security: []
+      responses:
+        "200":
+          description: Current gas tariff.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TariffResponse"
+
+  /energy/energy-services/v0/accounts/{account_number}/bills:
+    get:
+      summary: Historical bills
+      description: >
+        Legacy account endpoint. It returned HTTP 401 without Authorization during
+        verification and is not used by the current Home Assistant integration.
+      tags:
+        - Account
+        - Legacy
+      security:
+        - KrakenToken: []
+      parameters:
+        - $ref: "#/components/parameters/AccountNumber"
+      responses:
+        "200":
+          description: Bill list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyBillsResponse"
+        "401":
+          description: Missing or invalid Kraken token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /energy/energy-services/v0/accounts/{account_number}/payments:
+    get:
+      summary: Account payments
+      description: >
+        Legacy account endpoint. It returned HTTP 401 without Authorization during
+        verification and HTTP 500 for the authenticated account used during
+        verification. It is not used by the current Home Assistant integration.
+      tags:
+        - Account
+        - Legacy
+      security:
+        - KrakenToken: []
+      parameters:
+        - $ref: "#/components/parameters/AccountNumber"
+      responses:
+        "200":
+          description: Payment list.
           content:
             application/json:
               schema:
                 type: object
-                properties:
-                  data:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        date:
-                          type: string
-                          format: date-time
-                        values:
-                          type: object
-                          properties:
-                            allInPrijs:
-                              type: number
-                              description: The dynamic price per kWh including taxes, usually represented in cents (divide by 100 for Euro).
-
-  /energy/energy-services/v2/tarieven/electricity-prices:
-    get:
-      summary: Get Electricity Prices
-      description: Additional endpoint for electricity prices discovered in the app.
-      tags:
-        - Prices
-      responses:
-        '200':
-          description: Dynamic price data
-
-  /energy/energy-services/v2/tarieven/gas:
-    get:
-      summary: Get Gas Prices
-      description: Retrieve dynamic daily gas prices.
-      tags:
-        - Prices
-      responses:
-        '200':
-          description: Dynamic gas price data
+                additionalProperties: true
+        "401":
+          description: Missing or invalid Kraken token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Server error observed during authenticated verification.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
