@@ -16,13 +16,34 @@ A custom component for Home Assistant that natively integrates your ANWB Energie
 
 ## Energy Dashboard Setup
 
-To configure the built-in Home Assistant Energy Dashboard with your ANWB Energie data, navigate to **Settings** -> **Dashboards** -> **Energy** and configure the "Electricity grid" section using these specific sensors:
+To configure the built-in Home Assistant Energy Dashboard with your ANWB
+Energie data, navigate to **Settings** -> **Dashboards** -> **Energy** and use
+the canonical entities below.
 
-*   **Grid consumption:** `Electricity import year to date`
-*   **Return to grid:** `Electricity export year to date`
-*   **Track costs:** Select **"Use an entity with current price"** for both import and export, and choose the `Electricity current price` sensor.
+Home Assistant translates entity names when it creates them. The English names
+below may appear in your Home Assistant language, and the generated `sensor.*`
+entity IDs may be localized as well. Select the entities by their displayed
+meaning, and prefer these canonical entities if older legacy names also exist.
 
-*(Do not use the month-to-date totals or month-to-date cost sensors in the Energy Dashboard configuration.)*
+### Electricity grid
+
+| Energy Dashboard field | Select |
+| --- | --- |
+| Grid consumption | `Electricity import year to date` |
+| Return to grid | `Electricity export year to date` |
+| Cost tracking for grid consumption | Select **"Use an entity with current price"** and choose `Electricity current price` |
+| Cost tracking / compensation tracking for return to grid | Select **"Use an entity with current price"** and choose `Electricity current price` |
+
+### Gas
+
+| Energy Dashboard field | Select |
+| --- | --- |
+| Gas consumption | `Gas usage year to date` |
+| Gas cost tracking | Select **"Use an entity with current price"** and choose `Gas current price` |
+
+Do not use the month-to-date totals or month-to-date cost sensors in the Energy
+Dashboard configuration. They are useful for overview cards, but the Energy
+Dashboard should use the year-to-date usage entities and current price entities.
 
 > **⚠️ Note:** After installing the integration, it can take up to two hours for Home Assistant to generate the initial statistics. The sensors may not appear in the Energy Dashboard dropdown menus immediately. If they are missing, please wait a while and try again.
 
@@ -35,7 +56,8 @@ year to date`, and `Gas current price`.
 Older entity names such as `Yearly import usage`, `Monthly import usage`, and
 `Current electricity price` are kept for compatibility, but are disabled by
 default for newly created entity registry entries. Existing enabled entities are
-not disabled during upgrades.
+not disabled during upgrades. Prefer the canonical entity names in new Energy
+Dashboard configuration.
 
 Cost sensors are tariff-estimated values. Authenticated API verification showed
 that the account cache contains `variabeleKosten` and `vasteKosten` fields, but
