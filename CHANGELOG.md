@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.1.0](https://github.com/adrighem/ha-anwb-energie/compare/v1.0.2...v1.1.0) (2026-06-17)
+
+
+### Features
+
+* add canonical energy entities ([c4fe3c1](https://github.com/adrighem/ha-anwb-energie/commit/c4fe3c1d159d372930682fc9e5b58f60c018d042))
+
+
+### Bug Fixes
+
+* limit consumption cache fallback to DNS grace period ([4d631db](https://github.com/adrighem/ha-anwb-energie/commit/4d631db327d6ea1083c873e525633a429cb42d8f))
+* limit hassfest workflow permissions ([2947a82](https://github.com/adrighem/ha-anwb-energie/commit/2947a824f7e7858f11f2d60f41c3be1cefb1b059))
+
 ## [1.0.2](https://github.com/adrighem/ha-anwb-energie/compare/v1.0.1...v1.0.2) (2026-05-13)
 
 
