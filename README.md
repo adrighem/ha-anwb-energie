@@ -185,9 +185,9 @@ series:
 
 ### HACS (Recommended)
 1. Open HACS in your Home Assistant instance.
-2. Click the three dots in the top right corner and select **Custom repositories**.
-3. Add the URL to this repository and select **Integration** as the category.
-4. Click **Add**, then download the integration.
+2. Search for **ANWB Energie Account**.
+3. Click the three-dot menu.
+4. Select **Download**.
 5. Restart Home Assistant.
 
 ## Configuration
