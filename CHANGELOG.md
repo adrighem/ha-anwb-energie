@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/adrighem/ha-anwb-energie/compare/v1.1.0...v1.2.0) (2026-07-08)
+
+
+### Features
+
+* expose electricity market price ([af904b3](https://github.com/adrighem/ha-anwb-energie/commit/af904b34a18b647176a8a642fec1daaec7758492)), closes [#11](https://github.com/adrighem/ha-anwb-energie/issues/11)
+
 ## [1.1.0](https://github.com/adrighem/ha-anwb-energie/compare/v1.0.2...v1.1.0) (2026-06-17)
 
 
