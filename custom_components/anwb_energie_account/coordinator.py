@@ -371,32 +371,46 @@ class ANWBPricingCoordinator(ANWBBaseCoordinator):
         tomorrow = today + timedelta(days=1)
 
         has_tomorrow_electricity = False
+        has_tomorrow_market_price = False
         has_tomorrow_gas = False
 
         if self.data:
             prices = self.data.get("prices_today", {})
+            market_prices = self.data.get("market_prices_today", {})
             gas_prices = self.data.get("gas_prices_today", {})
             for k in prices:
                 if _local_date_for_api_datetime(k) == tomorrow:
                     has_tomorrow_electricity = True
+                    break
+            for k in market_prices:
+                if _local_date_for_api_datetime(k) == tomorrow:
+                    has_tomorrow_market_price = True
                     break
             for k in gas_prices:
                 if _local_date_for_api_datetime(k) == tomorrow:
                     has_tomorrow_gas = True
                     break
 
-        fetch_electricity = not has_tomorrow_electricity and local_now.hour >= 13
+        fetch_electricity = (
+            (not has_tomorrow_electricity or not has_tomorrow_market_price)
+            and local_now.hour >= 13
+        )
         fetch_gas = not has_tomorrow_gas and local_now.hour >= 6
 
         if not self.data:
             fetch_electricity = True
             fetch_gas = True
+        elif "market_prices_today" not in self.data:
+            fetch_electricity = True
 
         if not fetch_electricity and not fetch_gas and self.data:
             return dict(self.data)
 
         price_map: dict[str, float] = (
             dict(self.data.get("_raw_price_map", {})) if self.data else {}
+        )
+        market_price_map: dict[str, float] = (
+            dict(self.data.get("_raw_market_price_map", {})) if self.data else {}
         )
         gas_price_map: dict[str, float] = (
             dict(self.data.get("_raw_gas_price_map", {})) if self.data else {}
@@ -439,6 +453,7 @@ class ANWBPricingCoordinator(ANWBBaseCoordinator):
                                 continue
                             vals = p.get("values", {})
                             price_map[dt_str] = vals.get("allInPrijs") or 0.0
+                            market_price_map[dt_str] = vals.get("marktprijs") or 0.0
         except UpdateFailed as err:
             if "Kraken token expired" in str(err):
                 raise
@@ -466,6 +481,12 @@ class ANWBPricingCoordinator(ANWBBaseCoordinator):
             if _local_date_for_api_datetime(k) in (today, tomorrow)
         }
 
+        filtered_market_prices = {
+            k: v
+            for k, v in market_price_map.items()
+            if _local_date_for_api_datetime(k) in (today, tomorrow)
+        }
+
         filtered_gas_prices = {
             k: v
             for k, v in gas_price_map.items()
@@ -476,8 +497,10 @@ class ANWBPricingCoordinator(ANWBBaseCoordinator):
             "account_number": self._account_number,
             "account_address": self._account_address,
             "prices_today": filtered_prices,
+            "market_prices_today": filtered_market_prices,
             "gas_prices_today": filtered_gas_prices,
             "_raw_price_map": price_map,
+            "_raw_market_price_map": market_price_map,
             "_raw_gas_price_map": gas_price_map,
         }
 

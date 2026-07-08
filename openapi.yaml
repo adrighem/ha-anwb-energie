@@ -669,7 +669,9 @@ paths:
       summary: Dynamic electricity tariffs
       description: >
         Public dynamic electricity tariff endpoint. The integration queries this
-        endpoint with interval=HOUR and divides allInPrijs by 100 to expose EUR/kWh.
+        endpoint with interval=HOUR and divides allInPrijs by 100 to expose the
+        all-in EUR/kWh price. It also divides marktprijs by 100 to expose the
+        bare market EUR/kWh price.
       tags:
         - Prices
       security: []

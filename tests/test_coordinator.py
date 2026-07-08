@@ -264,15 +264,15 @@ async def test_pricing_keeps_local_day_rows_with_previous_utc_date(auth_mock):
                 "data": [
                     {
                         "date": "2026-06-14T22:00:00+00:00",
-                        "values": {"allInPrijs": 20.0},
+                        "values": {"allInPrijs": 20.0, "marktprijs": 10.0},
                     },
                     {
                         "date": "2026-06-15T22:00:00+00:00",
-                        "values": {"allInPrijs": 30.0},
+                        "values": {"allInPrijs": 30.0, "marktprijs": 20.0},
                     },
                     {
                         "date": "2026-06-16T22:00:00+00:00",
-                        "values": {"allInPrijs": 40.0},
+                        "values": {"allInPrijs": 40.0, "marktprijs": 30.0},
                     },
                 ]
             }
@@ -307,6 +307,10 @@ async def test_pricing_keeps_local_day_rows_with_previous_utc_date(auth_mock):
     assert result["prices_today"]["2026-06-14T22:00:00.000Z"] == 20.0
     assert result["prices_today"]["2026-06-15T22:00:00.000Z"] == 30.0
     assert "2026-06-16T22:00:00.000Z" not in result["prices_today"]
+
+    assert result["market_prices_today"]["2026-06-14T22:00:00.000Z"] == 10.0
+    assert result["market_prices_today"]["2026-06-15T22:00:00.000Z"] == 20.0
+    assert "2026-06-16T22:00:00.000Z" not in result["market_prices_today"]
 
     assert result["gas_prices_today"]["2026-06-14T22:00:00.000Z"] == 120.0
     assert result["gas_prices_today"]["2026-06-15T22:00:00.000Z"] == 130.0

@@ -59,6 +59,9 @@
       "electricity_current_price": {
         "name": "Electricity current price"
       },
+      "electricity_market_price": {
+        "name": "Electricity market price"
+      },
       "gas_month_to_date": {
         "name": "Gas usage month to date"
       },

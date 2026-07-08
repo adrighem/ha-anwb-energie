@@ -129,6 +129,7 @@ def test_sensor_types():
     assert "electricity_month_to_date_fixed_cost" in keys
     assert "electricity_month_to_date_total_cost" in keys
     assert "electricity_current_price" in keys
+    assert "electricity_market_price" in keys
     assert "gas_month_to_date" in keys
     assert "gas_month_to_date_cost" in keys
     assert "gas_year_to_date" in keys
@@ -206,6 +207,9 @@ def test_sensor_native_value():
         "prices_today": {
             "2026-04-20T00:00:00.000Z": 25.432,
         },
+        "market_prices_today": {
+            "2026-04-20T00:00:00.000Z": 12.345,
+        },
         "gas_prices_today": {
             "2026-04-20T00:00:00.000Z": 125.432,
         },
@@ -227,6 +231,11 @@ def test_sensor_native_value():
         desc = next(d for d in SENSOR_TYPES if d.key == "electricity_current_price")
         sensor = ANWBEnergieAccountSensor(coordinator, desc)
         assert sensor.native_value == 0.2543
+
+        # Test electricity_market_price
+        desc = next(d for d in SENSOR_TYPES if d.key == "electricity_market_price")
+        sensor = ANWBEnergieAccountSensor(coordinator, desc)
+        assert sensor.native_value == 0.1235
 
         # Test current_gas_price
         desc = next(d for d in SENSOR_TYPES if d.key == "current_gas_price")
@@ -257,6 +266,10 @@ def test_sensor_extra_attributes():
             "2026-04-20T00:00:00.000Z": 25.432,
             "2026-04-20T01:00:00.000Z": 22.112,
         },
+        "market_prices_today": {
+            "2026-04-20T00:00:00.000Z": 12.345,
+            "2026-04-20T01:00:00.000Z": 10.678,
+        },
         "gas_prices_today": {
             "2026-04-20T00:00:00.000Z": 125.432,
         },
@@ -269,6 +282,7 @@ def test_sensor_extra_attributes():
     assert attrs is not None
     assert "prices" in attrs
     assert attrs["prices"][0]["price"] == 0.2543
+    assert attrs["prices"][0]["market_price"] == 0.1235
 
     # Test canonical electricity_current_price
     desc = next(d for d in SENSOR_TYPES if d.key == "electricity_current_price")
@@ -277,6 +291,15 @@ def test_sensor_extra_attributes():
     assert attrs is not None
     assert "prices" in attrs
     assert attrs["prices"][0]["price"] == 0.2543
+    assert attrs["prices"][0]["market_price"] == 0.1235
+
+    # Test electricity_market_price
+    desc = next(d for d in SENSOR_TYPES if d.key == "electricity_market_price")
+    sensor = ANWBEnergieAccountSensor(coordinator, desc)
+    attrs = sensor.extra_state_attributes
+    assert attrs is not None
+    assert "prices" in attrs
+    assert attrs["prices"][0]["price"] == 0.1235
 
     # Test current_gas_price
     desc = next(d for d in SENSOR_TYPES if d.key == "current_gas_price")
@@ -320,6 +343,7 @@ async def test_setup_entry_routes_price_sensors_to_pricing_coordinator():
 
     entities_by_key = {entity.entity_description.key: entity for entity in added_entities}
     assert entities_by_key["electricity_current_price"].coordinator is pricing
+    assert entities_by_key["electricity_market_price"].coordinator is pricing
     assert entities_by_key["current_price"].coordinator is pricing
     assert entities_by_key["gas_current_price"].coordinator is pricing
     assert entities_by_key["current_gas_price"].coordinator is pricing

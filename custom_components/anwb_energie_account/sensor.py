@@ -27,8 +27,9 @@ from .coordinator import (
 )
 
 ELECTRICITY_PRICE_KEYS = {"current_price", "electricity_current_price"}
+ELECTRICITY_MARKET_PRICE_KEYS = {"electricity_market_price"}
 GAS_PRICE_KEYS = {"current_gas_price", "gas_current_price"}
-PRICE_SENSOR_KEYS = ELECTRICITY_PRICE_KEYS | GAS_PRICE_KEYS
+PRICE_SENSOR_KEYS = ELECTRICITY_PRICE_KEYS | ELECTRICITY_MARKET_PRICE_KEYS | GAS_PRICE_KEYS
 
 LEGACY_SENSOR_KEYS = {
     "import_usage",
@@ -124,6 +125,12 @@ SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
     SensorEntityDescription(
         key="electricity_current_price",
         translation_key="electricity_current_price",
+        native_unit_of_measurement=f"{CURRENCY_EURO}/{UnitOfEnergy.KILO_WATT_HOUR}",
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key="electricity_market_price",
+        translation_key="electricity_market_price",
         native_unit_of_measurement=f"{CURRENCY_EURO}/{UnitOfEnergy.KILO_WATT_HOUR}",
         state_class=SensorStateClass.MEASUREMENT,
     ),
@@ -353,6 +360,15 @@ class ANWBEnergieAccountSensor(CoordinatorEntity[ANWBBaseCoordinator], SensorEnt
                 return round(prices[current_hour_str] / 100.0, 4)
             return None
 
+        if self.entity_description.key in ELECTRICITY_MARKET_PRICE_KEYS:
+            current_hour_str = _normalize_api_datetime_key(
+                dt_util.utcnow().isoformat()
+            )
+            prices = self.coordinator.data.get("market_prices_today", {})
+            if current_hour_str in prices:
+                return round(prices[current_hour_str] / 100.0, 4)
+            return None
+
         if self.entity_description.key in GAS_PRICE_KEYS:
             current_hour_str = _normalize_api_datetime_key(
                 dt_util.utcnow().isoformat()
@@ -378,6 +394,16 @@ class ANWBEnergieAccountSensor(CoordinatorEntity[ANWBBaseCoordinator], SensorEnt
         if self.coordinator.data:
             if self.entity_description.key in ELECTRICITY_PRICE_KEYS:
                 prices = self.coordinator.data.get("prices_today", {})
+                market_prices = self.coordinator.data.get("market_prices_today", {})
+                price_records = []
+                for k, v in prices.items():
+                    record = {"start_time": k, "price": round(v / 100.0, 4)}
+                    if k in market_prices:
+                        record["market_price"] = round(market_prices[k] / 100.0, 4)
+                    price_records.append(record)
+                return {"prices": price_records}
+            elif self.entity_description.key in ELECTRICITY_MARKET_PRICE_KEYS:
+                prices = self.coordinator.data.get("market_prices_today", {})
                 return {
                     "prices": [
                         {"start_time": k, "price": round(v / 100.0, 4)}

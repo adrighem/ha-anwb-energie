@@ -9,7 +9,7 @@ A custom component for Home Assistant that natively integrates your ANWB Energie
 ## Features
 *   **Native Energy Dashboard Support:** Seamlessly integrates with the built-in Home Assistant Energy dashboard.
 *   **Hourly & Daily Statistics:** Import and export usage and costs are automatically added to Long-Term Statistics.
-*   **Current Dynamic Price Sensor:** Provides the current hourly electricity price, along with today's and tomorrow's prices as attributes for charting (e.g., via ApexCharts).
+*   **Current Dynamic Price Sensors:** Provides the current hourly all-in electricity price and bare market electricity price, along with today's and tomorrow's prices as attributes for charting (e.g., via ApexCharts).
 *   **Month-to-Date & Year-to-Date Overviews:** Dedicated sensors for current month and year totals.
 *   **Diagnostics Support:** Download redacted diagnostics natively from the UI to easily share bug reports.
 *   **Official Translation Support:** Fully supports English and Dutch seamlessly through Home Assistant's translation engine.
@@ -64,6 +64,11 @@ that the account cache contains `variabeleKosten` and `vasteKosten` fields, but
 those fields were zero even for non-zero usage. The integration therefore uses
 account-cache usage together with public hourly tariff data for variable cost
 calculations.
+
+`Electricity current price` is the all-in price and remains the entity to use
+for Energy Dashboard cost tracking. `Electricity market price` exposes the bare
+`marktprijs` from the same ANWB tariff response. The all-in price attributes also
+include `market_price` per hourly record for combined charting.
 
 ## Example Dashboards
 

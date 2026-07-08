@@ -59,6 +59,9 @@
       "electricity_current_price": {
         "name": "Actuele elektriciteitsprijs"
       },
+      "electricity_market_price": {
+        "name": "Actuele marktprijs elektriciteit"
+      },
       "gas_month_to_date": {
         "name": "Gasverbruik maand tot nu toe"
       },
