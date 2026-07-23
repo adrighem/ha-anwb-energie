@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/adrighem/ha-anwb-energie/compare/v1.2.0...v1.3.0) (2026-07-23)
+
+
+### Features
+
+* streamline cost entities and add persistent tariff caching ([50374a9](https://github.com/adrighem/ha-anwb-energie/commit/50374a9d2ab304afeb42a76aeb09185b55d24f37))
+
 ## [1.2.0](https://github.com/adrighem/ha-anwb-energie/compare/v1.1.0...v1.2.0) (2026-07-08)
 
 
