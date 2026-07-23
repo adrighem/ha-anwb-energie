@@ -17,6 +17,7 @@ from homeassistant.helpers.config_entry_oauth2_flow import (
     OAuth2Session,
     async_get_config_entry_implementation,
 )
+from homeassistant.helpers.storage import Store
 
 from . import api
 from .const import CLIENT_ID, DOMAIN
@@ -26,8 +27,42 @@ from .coordinator import (
     ANWBEnergieAccountConfigEntry,
     ANWBEnergieAccountData,
 )
+from .tariff_cache import TariffCache
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
+_TARIFF_CACHE_DATA_KEY = f"{DOMAIN}_tariff_cache"
+_TARIFF_CACHE_STORE_KEY = f"{DOMAIN}.tariff_cache"
+_TARIFF_CACHE_STORE_VERSION = 1
+
+
+async def _async_get_tariff_cache(hass: HomeAssistant) -> TariffCache:
+    """Return the shared tariff cache, loading persisted data once."""
+    timezone_name = getattr(hass.config, "time_zone", None)
+    if not isinstance(timezone_name, str):
+        timezone_name = "UTC"
+
+    existing = hass.data.get(_TARIFF_CACHE_DATA_KEY)
+    if (
+        isinstance(existing, TariffCache)
+        and existing.timezone_name == timezone_name
+    ):
+        await existing.async_initialize()
+        return existing
+
+    cache = TariffCache(
+        Store(
+            hass,
+            _TARIFF_CACHE_STORE_VERSION,
+            _TARIFF_CACHE_STORE_KEY,
+        ),
+        timezone_name,
+    )
+    # Store the instance before awaiting so concurrent config-entry setups
+    # converge on the same repository and its initialization lock.
+    hass.data[_TARIFF_CACHE_DATA_KEY] = cache
+    await cache.async_initialize()
+    await cache.async_prune()
+    return cache
 
 
 async def async_setup_entry(
@@ -63,14 +98,31 @@ async def async_setup_entry(
         aiohttp_client.async_get_clientsession(hass), session
     )
 
-    consumption_coordinator = ANWBConsumptionCoordinator(hass, auth, entry)
-    pricing_coordinator = ANWBPricingCoordinator(hass, auth, entry)
-
+    tariff_cache = await _async_get_tariff_cache(hass)
+    consumption_coordinator = ANWBConsumptionCoordinator(
+        hass,
+        auth,
+        entry,
+        tariff_cache=tariff_cache,
+    )
     await consumption_coordinator.async_config_entry_first_refresh()
+
+    pricing_coordinator = ANWBPricingCoordinator(
+        hass,
+        auth,
+        entry,
+        tariff_cache=tariff_cache,
+        gas_applicable=lambda: bool(
+            isinstance(consumption_coordinator.data, dict)
+            and consumption_coordinator.data.get("has_gas") is True
+        ),
+    )
     await pricing_coordinator.async_config_entry_first_refresh()
 
     entry.runtime_data = ANWBEnergieAccountData(
-        consumption=consumption_coordinator, pricing=pricing_coordinator
+        consumption=consumption_coordinator,
+        pricing=pricing_coordinator,
+        tariff_cache=tariff_cache,
     )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

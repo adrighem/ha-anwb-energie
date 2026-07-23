@@ -10,10 +10,11 @@ info:
     Services account cache endpoints, and reads dynamic tariffs from public ANWB
     tariff endpoints.
 
-    This specification is based on the integration code plus unauthenticated
-    endpoint probes performed on 2026-06-15. Customer account and consumption
-    responses still require a valid user token and their full schema should be
-    treated as partially inferred.
+    This specification is based on the integration code, authenticated probes
+    performed on 2026-06-15 and 2026-06-17, and an unauthenticated tariff-range
+    probe performed on 2026-07-23. Customer account and consumption responses
+    still require a valid user token and their full schema should be treated as
+    partially inferred.
 servers:
   - url: https://api.anwb.nl
     description: ANWB Energy Services API
@@ -26,9 +27,10 @@ tags:
   - name: Legacy
 
 x-anwb-verification:
-  checked_at: "2026-06-15"
+  checked_at: "2026-07-23"
   notes:
     - Public tariff endpoints returned HTTP 200 without an Authorization header.
+    - A 2026-07-23 follow-up found that v2 tariff endpoints return multi-day DAY ranges, while multi-day HOUR ranges return HTTP 500.
     - Account cache and legacy account endpoints returned HTTP 401 without an Authorization header.
     - Kraken GraphQL allows introspection without Authorization, but viewer/customer data requires Authorization.
     - Authenticated kraken-token returned HTTP 201 with accessToken and expiresIn.
@@ -81,7 +83,11 @@ components:
       schema:
         type: string
         format: date-time
-      description: Inclusive start timestamp.
+      description: >
+        Start value for the requested range. Account-cache endpoints use it as
+        a timestamp boundary. The v2 tariff endpoints instead interpret a
+        `00:00:00.000Z` value as a Europe/Amsterdam calendar-day label; it is
+        not a literal UTC boundary.
     EndDateTime:
       in: query
       name: endDate
@@ -89,7 +95,11 @@ components:
       schema:
         type: string
         format: date-time
-      description: Inclusive end timestamp.
+      description: >
+        End value for the requested range. Account-cache endpoints use it as a
+        timestamp boundary. The v2 tariff endpoints interpret the date as a
+        Europe/Amsterdam calendar-day label. Observed DAY responses omit the
+        start label, so callers that need that day include one leading label.
     ContractStartDate:
       in: query
       name: contractStartDate
@@ -109,7 +119,12 @@ components:
           - DAY
           - MONTH
           - YEAR
-      description: Cache aggregation interval. The integration currently uses HOUR and MONTH.
+      description: >
+        ANWB account-cache aggregation interval. The integration uses HOUR for
+        month-to-date usage and the current-month part of year-to-date cost
+        estimates, DAY for the completed-prior-month part of year-to-date cost
+        estimates, and MONTH for authoritative year-to-date usage and
+        reconciliation.
     TariffInterval:
       in: query
       name: interval
@@ -120,8 +135,13 @@ components:
           - HOUR
           - DAY
       description: >
-        Tariff aggregation interval. HOUR returned data for electricity and gas
-        during verification; DAY returned an empty array for the tested v2 ranges.
+        Tariff aggregation interval. HOUR returns hourly electricity and gas
+        data for a single-day range. Complete closed-local-day HOUR tariff sets
+        are persisted in the integration-local tariff cache for month-to-date
+        estimates, while the current day and tomorrow remain refreshable. DAY
+        returned multi-day data during the 2026-07-23 verification. Finite DAY
+        points are persisted individually for year-to-date estimates, which
+        remain unavailable until every non-zero usage day has a tariff.
 
   schemas:
     ErrorResponse:
@@ -279,7 +299,8 @@ components:
         were present during authenticated verification, but observed as zero for
         HOUR and MONTH electricity/production rows with non-zero usage. The Home
         Assistant integration therefore computes variable costs from the public
-        hourly tariff endpoints instead of using variabeleKosten.total.
+        tariff endpoints, using HOUR for the current month and DAY for completed
+        prior months, instead of using variabeleKosten.total.
       additionalProperties: true
       properties:
         dynamischeKosten:
@@ -573,8 +594,10 @@ paths:
       summary: Electricity import cache
       description: >
         Historical electricity consumption/import values for an account. The
-        integration queries HOUR for current-month statistics and MONTH for
-        year-to-date totals.
+        integration queries HOUR for month-to-date usage and the current-month
+        part of year-to-date costs, DAY for the completed-prior-month part of
+        year-to-date costs, and MONTH for authoritative year-to-date usage and
+        reconciliation.
       tags:
         - Consumption
       security:
@@ -604,8 +627,10 @@ paths:
       summary: Electricity export/production cache
       description: >
         Historical electricity production/export values for an account. The
-        integration queries HOUR for current-month statistics and MONTH for
-        year-to-date totals.
+        integration queries HOUR for month-to-date usage and the current-month
+        part of year-to-date costs, DAY for the completed-prior-month part of
+        year-to-date costs, and MONTH for authoritative year-to-date usage and
+        reconciliation.
       tags:
         - Consumption
       security:
@@ -635,9 +660,12 @@ paths:
       summary: Gas consumption cache
       description: >
         Historical gas consumption values for an account. The integration queries
-        HOUR for current-month statistics and MONTH for year-to-date totals. During
-        authenticated verification, an account without gas returned HTTP 200 with
-        an empty data array. The integration also treats 404 as an empty response.
+        HOUR for month-to-date usage and the current-month part of year-to-date
+        costs, DAY for the completed-prior-month part of year-to-date costs, and
+        MONTH for authoritative year-to-date usage and reconciliation. During
+        authenticated verification, an account without gas returned HTTP 200
+        with an empty data array. The integration also treats 404 as an empty
+        response.
       tags:
         - Consumption
       security:
@@ -671,7 +699,14 @@ paths:
         Public dynamic electricity tariff endpoint. The integration queries this
         endpoint with interval=HOUR and divides allInPrijs by 100 to expose the
         all-in EUR/kWh price. It also divides marktprijs by 100 to expose the
-        bare market EUR/kWh price.
+        bare market EUR/kWh price. For cost estimates, complete closed-local-day
+        HOUR tariffs are persisted in the integration-local tariff cache and
+        reused by month-to-date calculations, while open-day HOUR tariffs remain
+        refreshable. Year-to-date estimates reuse that current-month calculation
+        and add individually persisted finite DAY tariffs for completed prior
+        months. Every non-zero usage day still requires a matching tariff;
+        January is HOUR-only. DAY is used because multi-day HOUR ranges return
+        HTTP 500.
       tags:
         - Prices
       security: []
@@ -693,8 +728,14 @@ paths:
       description: >
         Public dynamic gas tariff endpoint. The integration queries this endpoint
         with interval=HOUR and divides allInPrijs by 100 to expose EUR/m³. During
-        verification, interval=HOUR returned hourly-expanded values and interval=DAY
-        returned an empty array for the tested range.
+        verification, interval=HOUR returned hourly-expanded values. For cost
+        estimates, complete closed-local-day HOUR tariffs are persisted in the
+        integration-local tariff cache and reused by month-to-date calculations,
+        while open-day HOUR tariffs remain refreshable. Year-to-date estimates
+        reuse that current-month calculation and add individually persisted
+        finite DAY tariffs for completed prior months. Every non-zero usage day
+        still requires a matching tariff; January is HOUR-only. DAY is used
+        because multi-day HOUR ranges return HTTP 500.
       tags:
         - Prices
       security: []

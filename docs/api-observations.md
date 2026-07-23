@@ -67,6 +67,60 @@ Design implication:
   values or provider-billed values. The currently verified cache cost fields do
   not support provider-billed cost entities.
 
+## 2026-07-23 Historical Tariff Ranges
+
+A public, unauthenticated follow-up checked the v2 electricity and gas tariff
+endpoints with historical multi-day ranges:
+
+- `interval=HOUR` returned HTTP 500 for seven-day and month-long ranges.
+- `interval=DAY` returned one daily tariff point per completed day.
+- A January-through-July `interval=DAY` request succeeded for both electricity
+  and gas in one request per commodity.
+
+The integration therefore keeps ANWB account-cache usage separate from its
+persisted integration-local tariff cache:
+
+- Month-to-date estimates match `HOUR` usage to `HOUR` tariffs. Complete tariff
+  sets for closed local days are persisted, while the current day and tomorrow
+  remain refreshable.
+- Year-to-date estimates reuse the current-month `HOUR` calculation and add
+  completed prior months using `DAY` usage and tariffs. Each finite closed-day
+  tariff returned by ANWB is persisted; a result is published only when every
+  non-zero usage day has a tariff. January is therefore `HOUR`-only.
+- Existing year-to-date usage remains sourced from the verified `MONTH`
+  response. The current-period `HOUR` usage sum is checked when its `MONTH` row
+  is available. The combined `DAY` usage for completed prior months must match
+  the combined authoritative `MONTH` usage before a cost estimate is published.
+
+The tariff API treats `startDate` and `endDate` as Europe/Amsterdam calendar-day
+labels even though the query values end in `Z`. The integration therefore maps
+each Home Assistant local day to the one or two overlapping ANWB day labels,
+combines those responses, and then keeps only canonical UTC points belonging to
+the requested local day. The same trailing-label handling is applied to `DAY`
+lookups for Home Assistant installations outside the Amsterdam timezone.
+
+The persisted integration-local tariff cache is shared by the pricing and
+consumption coordinators and survives integration reloads and Home Assistant
+restarts. Entries are separated by commodity and resolution: `HOUR` points use
+their canonical UTC timestamp, while `DAY` points use the Home Assistant local
+date. Only finite numeric values from public tariff responses are persisted;
+ANWB account-cache usage and credentials are never stored in this cache.
+
+Failed, empty, or partial responses do not evict valid cached values or mark a
+period complete. Missing and newly closed periods remain retryable. Strict
+coverage still applies: a non-zero usage interval without a matching tariff
+makes its cost estimate unavailable rather than implicitly pricing it at zero.
+This bounds refresh traffic, but the completed-month part remains a daily
+aggregate estimate rather than an hourly usage-weighted calculation.
+
+For an empty cache, the consumption calculation on 31 December needs at most
+31 local-day `HOUR` lookups plus one prior-month `DAY` range per commodity when
+every December day has non-zero usage. In the Amsterdam timezone each lookup is
+one HTTP request; another Home Assistant timezone can require two sequential
+ANWB day-label requests for one local day. No more than four tariff fetches run
+concurrently. Once warm, closed days and completed months make no further
+tariff requests; only open or still-missing periods are retried.
+
 ## Re-Verification Workflow
 
 Use `scripts/anwb_api_probe.py` to re-check whether account-cache cost fields are

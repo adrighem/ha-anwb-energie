@@ -39,67 +39,76 @@
         "name": "Electricity export month to date"
       },
       "electricity_import_month_to_date_cost": {
-        "name": "Electricity import cost month to date"
+        "name": "Estimated electricity import usage cost month to date"
       },
       "electricity_export_month_to_date_credit": {
-        "name": "Electricity export credit month to date"
+        "name": "Estimated electricity export value month to date"
       },
       "electricity_import_year_to_date": {
         "name": "Electricity import year to date"
       },
+      "electricity_import_year_to_date_cost": {
+        "name": "Estimated electricity import usage cost year to date"
+      },
       "electricity_export_year_to_date": {
         "name": "Electricity export year to date"
       },
+      "electricity_export_year_to_date_credit": {
+        "name": "Estimated electricity export value year to date"
+      },
       "electricity_month_to_date_fixed_cost": {
-        "name": "Electricity fixed cost month to date"
+        "name": "Estimated electricity fixed charges month to date"
       },
       "electricity_month_to_date_total_cost": {
-        "name": "Electricity total cost month to date"
+        "name": "Estimated electricity net cost month to date"
       },
       "electricity_current_price": {
-        "name": "Electricity current price"
+        "name": "Electricity current all-in price"
       },
       "electricity_market_price": {
-        "name": "Electricity market price"
+        "name": "Electricity current bare market price"
       },
       "gas_month_to_date": {
         "name": "Gas usage month to date"
       },
       "gas_month_to_date_cost": {
-        "name": "Gas cost month to date"
+        "name": "Estimated gas usage cost month to date"
       },
       "gas_year_to_date": {
         "name": "Gas usage year to date"
       },
+      "gas_year_to_date_cost": {
+        "name": "Estimated gas usage cost year to date"
+      },
       "gas_month_to_date_fixed_cost": {
-        "name": "Gas fixed cost month to date"
+        "name": "Estimated gas fixed charges month to date"
       },
       "gas_month_to_date_total_cost": {
-        "name": "Gas total cost month to date"
+        "name": "Estimated gas total cost month to date"
       },
       "gas_current_price": {
-        "name": "Gas current price"
+        "name": "Gas current all-in price"
       },
       "current_price": {
         "name": "Current electricity price"
       },
             "export_cost": {
-                "name": "Monthly export cost"
+                "name": "Estimated electricity export value month to date (legacy alias)"
             },
             "export_usage": {
                 "name": "Monthly export usage"
             },
             "fixed_cost": {
-                "name": "Monthly fixed cost"
+                "name": "Estimated electricity fixed charges month to date (legacy alias)"
             },
             "import_cost": {
-                "name": "Monthly import cost"
+                "name": "Estimated electricity import usage cost month to date (legacy alias)"
             },
             "import_usage": {
                 "name": "Monthly import usage"
             },
             "total_cost": {
-                "name": "Total monthly cost"
+                "name": "Estimated electricity net cost month to date (legacy alias)"
             },
             "yearly_export_usage": {
                 "name": "Yearly export usage"
@@ -111,16 +120,16 @@
                 "name": "Monthly gas usage"
             },
             "gas_cost": {
-                "name": "Monthly gas cost"
+                "name": "Estimated gas usage cost month to date (legacy alias)"
             },
             "yearly_gas_usage": {
                 "name": "Yearly gas usage"
             },
             "fixed_cost_gas": {
-                "name": "Monthly fixed gas cost"
+                "name": "Estimated gas fixed charges month to date (legacy alias)"
             },
             "total_cost_gas": {
-                "name": "Total monthly gas cost"
+                "name": "Estimated gas total cost month to date (legacy alias)"
             },
             "current_gas_price": {
                 "name": "Current gas price"

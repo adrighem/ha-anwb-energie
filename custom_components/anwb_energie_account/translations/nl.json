@@ -39,46 +39,55 @@
         "name": "Elektriciteitsexport maand tot nu toe"
       },
       "electricity_import_month_to_date_cost": {
-        "name": "Importkosten elektriciteit maand tot nu toe"
+        "name": "Geschatte verbruikskosten voor elektriciteitsimport maand tot nu toe"
       },
       "electricity_export_month_to_date_credit": {
-        "name": "Exportvergoeding elektriciteit maand tot nu toe"
+        "name": "Geschatte waarde van elektriciteitsexport maand tot nu toe"
       },
       "electricity_import_year_to_date": {
         "name": "Elektriciteitsimport jaar tot nu toe"
       },
+      "electricity_import_year_to_date_cost": {
+        "name": "Geschatte verbruikskosten voor elektriciteitsimport jaar tot nu toe"
+      },
       "electricity_export_year_to_date": {
         "name": "Elektriciteitsexport jaar tot nu toe"
       },
+      "electricity_export_year_to_date_credit": {
+        "name": "Geschatte waarde van elektriciteitsexport jaar tot nu toe"
+      },
       "electricity_month_to_date_fixed_cost": {
-        "name": "Vaste elektriciteitskosten maand tot nu toe"
+        "name": "Geschatte vaste lasten voor elektriciteit maand tot nu toe"
       },
       "electricity_month_to_date_total_cost": {
-        "name": "Totale elektriciteitskosten maand tot nu toe"
+        "name": "Geschatte netto elektriciteitskosten maand tot nu toe"
       },
       "electricity_current_price": {
-        "name": "Actuele elektriciteitsprijs"
+        "name": "Actuele all-inprijs voor elektriciteit"
       },
       "electricity_market_price": {
-        "name": "Actuele marktprijs elektriciteit"
+        "name": "Actuele kale marktprijs voor elektriciteit"
       },
       "gas_month_to_date": {
         "name": "Gasverbruik maand tot nu toe"
       },
       "gas_month_to_date_cost": {
-        "name": "Gaskosten maand tot nu toe"
+        "name": "Geschatte verbruikskosten voor gas maand tot nu toe"
       },
       "gas_year_to_date": {
         "name": "Gasverbruik jaar tot nu toe"
       },
+      "gas_year_to_date_cost": {
+        "name": "Geschatte verbruikskosten voor gas jaar tot nu toe"
+      },
       "gas_month_to_date_fixed_cost": {
-        "name": "Vaste gaskosten maand tot nu toe"
+        "name": "Geschatte vaste lasten voor gas maand tot nu toe"
       },
       "gas_month_to_date_total_cost": {
-        "name": "Totale gaskosten maand tot nu toe"
+        "name": "Geschatte totale gaskosten maand tot nu toe"
       },
       "gas_current_price": {
-        "name": "Actuele gasprijs"
+        "name": "Actuele all-inprijs voor gas"
       },
       "import_usage": {
         "name": "Maandelijks importverbruik"
@@ -87,10 +96,10 @@
         "name": "Maandelijks exportverbruik"
       },
       "import_cost": {
-        "name": "Maandelijkse importkosten"
+        "name": "Geschatte verbruikskosten voor elektriciteitsimport maand tot nu toe (verouderde alias)"
       },
       "export_cost": {
-        "name": "Maandelijkse exportkosten"
+        "name": "Geschatte waarde van elektriciteitsexport maand tot nu toe (verouderde alias)"
       },
       "yearly_import_usage": {
         "name": "Jaarlijks importverbruik"
@@ -99,10 +108,10 @@
         "name": "Jaarlijks exportverbruik"
       },
       "fixed_cost": {
-        "name": "Maandelijkse vaste kosten"
+        "name": "Geschatte vaste lasten voor elektriciteit maand tot nu toe (verouderde alias)"
       },
       "total_cost": {
-        "name": "Totale maandelijkse kosten"
+        "name": "Geschatte netto elektriciteitskosten maand tot nu toe (verouderde alias)"
       },
       "current_price": {
         "name": "Huidige elektriciteitsprijs"
@@ -111,16 +120,16 @@
         "name": "Maandelijks gasverbruik"
       },
       "gas_cost": {
-        "name": "Maandelijkse gaskosten"
+        "name": "Geschatte verbruikskosten voor gas maand tot nu toe (verouderde alias)"
       },
       "yearly_gas_usage": {
         "name": "Jaarlijks gasverbruik"
       },
       "fixed_cost_gas": {
-        "name": "Maandelijkse vaste gaskosten"
+        "name": "Geschatte vaste lasten voor gas maand tot nu toe (verouderde alias)"
       },
       "total_cost_gas": {
-        "name": "Totale maandelijkse gaskosten"
+        "name": "Geschatte totale gaskosten maand tot nu toe (verouderde alias)"
       },
       "current_gas_price": {
         "name": "Huidige gasprijs"

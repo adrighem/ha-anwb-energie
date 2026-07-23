@@ -18,6 +18,7 @@ sys.modules["homeassistant.components.application_credentials"] = MagicMock()
 sys.modules["homeassistant.helpers"] = MagicMock()
 sys.modules["homeassistant.helpers.aiohttp_client"] = MagicMock()
 sys.modules["homeassistant.helpers.config_entry_oauth2_flow"] = MagicMock()
+sys.modules["homeassistant.helpers.storage"] = MagicMock()
 
 
 class DataUpdateCoordinatorMeta(type):
