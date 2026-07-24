@@ -131,6 +131,66 @@ def _complete_amsterdam_hourly_tariffs(
     return rows
 
 
+@pytest.mark.parametrize(
+    (
+        "now",
+        "expected_month_start",
+        "expected_month_end",
+        "expected_year_start",
+    ),
+    [
+        (
+            datetime.datetime(2026, 7, 24, 12, tzinfo=ZoneInfo("Europe/Amsterdam")),
+            "2026-06-30T22:00:00.000Z",
+            "2026-07-31T21:59:59.999Z",
+            "2025-12-31T23:00:00.000Z",
+        ),
+        (
+            datetime.datetime(2026, 1, 24, 12, tzinfo=ZoneInfo("Europe/Amsterdam")),
+            "2025-12-31T23:00:00.000Z",
+            "2026-01-31T22:59:59.999Z",
+            "2025-12-31T23:00:00.000Z",
+        ),
+        (
+            datetime.datetime(2026, 3, 24, 12, tzinfo=ZoneInfo("Europe/Amsterdam")),
+            "2026-02-28T23:00:00.000Z",
+            "2026-03-31T21:59:59.999Z",
+            "2025-12-31T23:00:00.000Z",
+        ),
+        (
+            datetime.datetime(
+                2026,
+                10,
+                24,
+                12,
+                tzinfo=ZoneInfo("Europe/Amsterdam"),
+            ),
+            "2026-09-30T22:00:00.000Z",
+            "2026-10-31T22:59:59.999Z",
+            "2025-12-31T23:00:00.000Z",
+        ),
+        (
+            datetime.datetime(2026, 12, 24, 12, tzinfo=datetime.timezone.utc),
+            "2026-12-01T00:00:00.000Z",
+            "2026-12-31T23:59:59.999Z",
+            "2026-01-01T00:00:00.000Z",
+        ),
+    ],
+)
+def test_account_cache_query_boundaries_follow_local_calendar_periods(
+    now,
+    expected_month_start,
+    expected_month_end,
+    expected_year_start,
+):
+    """Test account-cache timestamps preserve local month and year boundaries."""
+    assert coord_mod._account_cache_query_boundaries(now) == (
+        expected_month_start,
+        expected_month_end,
+        expected_year_start,
+    )
+
+
 @pytest.mark.asyncio
 async def test_tariff_cache_is_shared_in_home_assistant_runtime():
     """Test config entries reuse one initialized persistent tariff cache."""
@@ -607,6 +667,114 @@ async def test_update_data_with_gas(auth_mock):
         assert result["gas_fixed_cost_source"] == "account_cache"
         assert result["monthly_period_start"] == "2026-04-01T00:00:00+00:00"
         assert result["yearly_period_start"] == "2026-01-01T00:00:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_update_data_includes_first_amsterdam_month_hours(auth_mock):
+    """Test summer month boundaries include the first two local usage hours."""
+    hass = MagicMock()
+    coordinator = ANWBConsumptionCoordinator(hass, auth_mock, MagicMock())
+    coordinator._kraken_token = "mock_kraken_token"
+    coordinator._account_number = "12345"
+    coordinator._account_address = "Mock Address"
+
+    mock_now = datetime.datetime(
+        2026,
+        7,
+        24,
+        10,
+        tzinfo=datetime.timezone.utc,
+    )
+    import_rows = [
+        {"startDate": "2026-06-30T22:00:00.000Z", "usage": 0.1},
+        {"startDate": "2026-06-30T23:00:00.000Z", "usage": 0.2},
+    ]
+    export_rows = [
+        {"startDate": "2026-06-30T22:00:00.000Z", "usage": 0.05},
+        {"startDate": "2026-06-30T23:00:00.000Z", "usage": 0.1},
+    ]
+    urls = []
+
+    async def mock_fetch_side_effect(url, token):
+        urls.append(url)
+        if "electricity/cache" in url and "interval=HOUR" in url:
+            return {"data": import_rows}
+        if "production/cache" in url and "interval=HOUR" in url:
+            return {"data": export_rows}
+        if "electricity/cache" in url and "interval=MONTH" in url:
+            return {
+                "data": [
+                    {"startDate": "2026-07-01T00:00:00.000Z", "usage": 0.3}
+                ]
+            }
+        if "production/cache" in url and "interval=MONTH" in url:
+            return {
+                "data": [
+                    {"startDate": "2026-07-01T00:00:00.000Z", "usage": 0.15}
+                ]
+            }
+        if "tarieven/electricity" in url and "interval=HOUR" in url:
+            return {
+                "data": _complete_amsterdam_hourly_tariffs(
+                    datetime.date(2026, 7, 1),
+                    all_in_price=20.0,
+                )
+            }
+        return {"data": []}
+
+    with (
+        patch.object(coord_mod.dt_util, "utcnow", return_value=mock_now),
+        patch.object(
+            coord_mod.dt_util,
+            "as_local",
+            side_effect=lambda value: value.astimezone(
+                ZoneInfo("Europe/Amsterdam")
+            ),
+        ),
+        patch.object(
+            coordinator, "_async_fetch_data", new_callable=AsyncMock
+        ) as mock_fetch,
+        patch.object(
+            coordinator, "_insert_statistics", new_callable=AsyncMock
+        ) as insert_statistics,
+    ):
+        mock_fetch.side_effect = mock_fetch_side_effect
+        result = await coordinator._async_update_data_internal()
+
+    hourly_cache_urls = [
+        url for url in urls if "/accounts/" in url and "interval=HOUR" in url
+    ]
+    yearly_cache_urls = [
+        url
+        for url in urls
+        if "/accounts/" in url
+        and ("interval=DAY" in url or "interval=MONTH" in url)
+    ]
+    assert hourly_cache_urls
+    assert all(
+        "startDate=2026-06-30T22:00:00.000Z" in url
+        and "endDate=2026-07-31T21:59:59.999Z" in url
+        for url in hourly_cache_urls
+    )
+    assert yearly_cache_urls
+    assert all(
+        "startDate=2025-12-31T23:00:00.000Z" in url
+        and "endDate=2026-07-31T21:59:59.999Z" in url
+        for url in yearly_cache_urls
+    )
+    assert all(
+        "contractStartDate=2025-12-31T23:00:00.000Z" in url
+        for url in hourly_cache_urls + yearly_cache_urls
+    )
+
+    assert result["electricity_import_month_to_date"] == pytest.approx(0.3)
+    assert result["electricity_import_month_to_date_cost"] == pytest.approx(0.06)
+    assert result["electricity_export_month_to_date"] == pytest.approx(0.15)
+    assert result["electricity_export_month_to_date_credit"] == pytest.approx(0.03)
+    assert result["electricity_import_tariff_coverage"]["complete"] is True
+    assert result["electricity_export_tariff_coverage"]["complete"] is True
+    assert insert_statistics.await_args.args[0] == import_rows
+    assert insert_statistics.await_args.args[1] == export_rows
 
 
 @pytest.mark.asyncio

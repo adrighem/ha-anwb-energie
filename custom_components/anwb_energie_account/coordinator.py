@@ -134,6 +134,37 @@ def _configured_time_zone_name() -> str:
     return key if isinstance(key, str) else str(configured)
 
 
+def _format_account_cache_datetime(value: datetime) -> str:
+    """Format an account-cache timestamp as an exact UTC boundary."""
+    utc_value = _as_utc(value)
+    return f"{utc_value.isoformat(timespec='milliseconds').removesuffix('+00:00')}Z"
+
+
+def _account_cache_query_boundaries(now: datetime) -> tuple[str, str, str]:
+    """Return UTC month start/end and year start for account-cache queries."""
+    month_start = now.replace(
+        day=1,
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+    next_month_start = (
+        month_start.replace(year=month_start.year + 1, month=1)
+        if month_start.month == 12
+        else month_start.replace(month=month_start.month + 1)
+    )
+    year_start = month_start.replace(month=1)
+
+    return (
+        _format_account_cache_datetime(month_start),
+        _format_account_cache_datetime(
+            _as_utc(next_month_start) - timedelta(milliseconds=1)
+        ),
+        _format_account_cache_datetime(year_start),
+    )
+
+
 def _local_day_tariff_range(local_day: date) -> tuple[str, str]:
     """Return ANWB's date-labelled range for one Amsterdam tariff day."""
     day_label = local_day.isoformat()
@@ -1119,10 +1150,8 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
         same_year_as_previous = (
             previous_data.get("yearly_period_start") == yearly_period_start
         )
-        start = f"{now.year}-{now.month:02d}-01T00:00:00.000Z"
+        start, end, c_start = _account_cache_query_boundaries(now)
         last_day = calendar.monthrange(now.year, now.month)[1]
-        end = f"{now.year}-{now.month:02d}-{last_day}T23:59:59.999Z"
-        c_start = f"{now.year}-01-01T00:00:00.000Z"
 
         url_import = (
             "https://api.anwb.nl/energy/energy-services/v1/accounts/"
