@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.1](https://github.com/adrighem/ha-anwb-energie/compare/v1.3.0...v1.3.1) (2026-07-24)
+
+
+### Bug Fixes
+
+* use local periods for account cache queries ([901358a](https://github.com/adrighem/ha-anwb-energie/commit/901358a35cbddf24ee2f2d3c9cb611e83b8c9ea0)), closes [#14](https://github.com/adrighem/ha-anwb-energie/issues/14)
+
 ## [1.3.0](https://github.com/adrighem/ha-anwb-energie/compare/v1.2.0...v1.3.0) (2026-07-23)
 
 
