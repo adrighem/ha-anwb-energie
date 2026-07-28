@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.2](https://github.com/adrighem/ha-anwb-energie/compare/v1.3.1...v1.3.2) (2026-07-28)
+
+
+### Bug Fixes
+
+* correct Home Assistant brand icon sizes ([8117dcc](https://github.com/adrighem/ha-anwb-energie/commit/8117dcc25a324960f36b9eaca4faba5311b67cc4))
+* finish local brand asset cleanup ([3e70c6a](https://github.com/adrighem/ha-anwb-energie/commit/3e70c6af0c466b66efdfe92d1bb789fb8fdeab05))
+
 ## [1.3.1](https://github.com/adrighem/ha-anwb-energie/compare/v1.3.0...v1.3.1) (2026-07-24)
 
 
