@@ -2,8 +2,9 @@
 """Test the ANWB Energie Account config flow without requiring a full Home Assistant installation."""
 
 import sys
-from unittest.mock import MagicMock, patch, AsyncMock
 import urllib.parse
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 # Mock homeassistant before importing config_flow to allow testing without the core library

@@ -272,6 +272,8 @@ series:
 
 ## Installation
 
+Requires Home Assistant 2026.3.0 or newer.
+
 ### HACS (Recommended)
 1. Open HACS in your Home Assistant instance.
 2. Search for **ANWB Energie Account**.

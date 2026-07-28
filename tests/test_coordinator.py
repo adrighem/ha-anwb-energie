@@ -4,8 +4,9 @@
 import importlib
 import sys
 from types import SimpleNamespace
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from zoneinfo import ZoneInfo
+
 import pytest
 
 # Mock homeassistant modules to allow testing without core
@@ -81,6 +82,7 @@ sys.modules[
 sys.modules["homeassistant.helpers.update_coordinator"].UpdateFailed = UpdateFailed
 
 import datetime  # noqa: E402
+
 import custom_components.anwb_energie_account as integration_mod  # noqa: E402
 import custom_components.anwb_energie_account.coordinator as coord_mod  # noqa: E402
 

@@ -7,11 +7,10 @@ import hashlib
 import logging
 import os
 import time
-from typing import Any
 import urllib.parse
+from typing import Any
 
 import voluptuous as vol
-
 from homeassistant.components.application_credentials import (
     ClientCredential,
     async_import_client_credential,
