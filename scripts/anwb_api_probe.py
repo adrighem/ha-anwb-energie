@@ -5,16 +5,18 @@ from __future__ import annotations
 
 import argparse
 import base64
+import getpass
 import hashlib
 import json
 import os
 import secrets
 import sys
 import time
+import warnings
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import Request, urlopen
@@ -50,6 +52,27 @@ class ProbeWindow:
     intervals: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class JsonResponse:
+    """A parsed response without retaining an unusable upstream body."""
+
+    status: int
+    payload: dict[str, Any]
+    is_json_object: bool
+
+
+class ProbeError(RuntimeError):
+    """An error with a message that is safe to show to the user."""
+
+
+class SafeArgumentParser(argparse.ArgumentParser):
+    """Avoid reflecting potentially sensitive arguments in parser errors."""
+
+    def error(self, _: str) -> NoReturn:
+        self.print_usage(sys.stderr)
+        self.exit(2, f"{self.prog}: error: invalid command-line arguments\n")
+
+
 def _ensure_probe_dir() -> None:
     PROBE_DIR.mkdir(mode=0o700, exist_ok=True)
     try:
@@ -60,11 +83,24 @@ def _ensure_probe_dir() -> None:
 
 def _write_secret_json(path: Path, payload: dict[str, Any]) -> None:
     _ensure_probe_dir()
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    flags = os.O_WRONLY | os.O_CREAT
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+
+    file_descriptor = os.open(path, flags, 0o600)
     try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
+        if hasattr(os, "fchmod"):
+            os.fchmod(file_descriptor, 0o600)
+        os.ftruncate(file_descriptor, 0)
+        with os.fdopen(
+            file_descriptor,
+            "w",
+            encoding="utf-8",
+            closefd=False,
+        ) as secret_file:
+            json.dump(payload, secret_file, indent=2, sort_keys=True)
+    finally:
+        os.close(file_descriptor)
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -81,7 +117,7 @@ def _request_json(
     form: dict[str, str] | None = None,
     json_body: dict[str, Any] | None = None,
     timeout: int = 30,
-) -> tuple[int, dict[str, Any]]:
+) -> JsonResponse:
     body: bytes | None = None
     req_headers = dict(headers or {})
     if form is not None:
@@ -94,15 +130,79 @@ def _request_json(
     request = Request(url, data=body, headers=req_headers, method=method)
     try:
         with urlopen(request, timeout=timeout) as response:
-            raw = response.read().decode()
-            return response.status, json.loads(raw) if raw else {}
+            response_body = response.read()
     except HTTPError as err:
-        raw = err.read().decode()
-        try:
-            payload = json.loads(raw) if raw else {}
-        except json.JSONDecodeError:
-            payload = {"raw": raw[:1000]}
-        return err.code, payload
+        status = err.code
+        err.close()
+        return JsonResponse(status=status, payload={}, is_json_object=False)
+
+    if not response_body:
+        return JsonResponse(status=response.status, payload={}, is_json_object=True)
+
+    try:
+        payload = json.loads(response_body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return JsonResponse(
+            status=response.status,
+            payload={},
+            is_json_object=False,
+        )
+    if not isinstance(payload, dict):
+        return JsonResponse(
+            status=response.status,
+            payload={},
+            is_json_object=False,
+        )
+    return JsonResponse(
+        status=response.status,
+        payload=payload,
+        is_json_object=True,
+    )
+
+
+def _safe_http_status(status: object) -> int | str:
+    if type(status) is int and 100 <= status <= 599:
+        return status
+    return "unknown"
+
+
+def _require_json_response(
+    response: JsonResponse,
+    *,
+    operation: str,
+    expected_statuses: tuple[int, ...] = (200,),
+) -> dict[str, Any]:
+    if response.status not in expected_statuses:
+        status = _safe_http_status(response.status)
+        raise ProbeError(f"{operation} failed with HTTP {status}")
+    if not response.is_json_object:
+        raise ProbeError(f"{operation} returned an invalid JSON response")
+    return response.payload
+
+
+def _required_credential(
+    payload: dict[str, Any],
+    key: str,
+    *,
+    operation: str,
+) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str) or not value:
+        raise ProbeError(f"{operation} response omitted required credentials")
+    return value
+
+
+def _expires_at(
+    payload: dict[str, Any],
+    key: str,
+    *,
+    operation: str,
+) -> float:
+    try:
+        expires_in = int(payload.get(key, 0) or 0)
+    except (TypeError, ValueError, OverflowError):
+        raise ProbeError(f"{operation} response had invalid expiry metadata") from None
+    return _utc_now_ts() + expires_in - 60
 
 
 def _utc_now_ts() -> float:
@@ -169,25 +269,102 @@ def command_login_url(_: argparse.Namespace) -> int:
     return 0
 
 
-def _extract_code(callback_url: str) -> tuple[str, str | None]:
-    parsed = urlparse(callback_url)
-    params = parse_qs(parsed.query)
-    code = params.get("code", [None])[0]
-    state = params.get("state", [None])[0]
-    if not code:
-        raise RuntimeError("Callback URL does not contain a code query parameter")
-    return code, state
+def _extract_code(callback_url: str) -> tuple[str, str]:
+    expected = urlparse(REDIRECT_URI)
+    try:
+        parsed = urlparse(callback_url)
+        expected_port = expected.port
+        if expected_port is None:
+            expected_port = {"http": 80, "https": 443}.get(expected.scheme)
+        callback_port = parsed.port
+        if callback_port is None:
+            callback_port = {"http": 80, "https": 443}.get(parsed.scheme)
+        callback_hostname = parsed.hostname
+    except ValueError:
+        raise ProbeError("Callback URL does not match the configured redirect URI") from None
+
+    if (
+        parsed.scheme != expected.scheme
+        or callback_hostname != expected.hostname
+        or callback_port != expected_port
+        or parsed.path != expected.path
+        or parsed.params
+        or parsed.fragment
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise ProbeError("Callback URL does not match the configured redirect URI")
+
+    params = parse_qs(parsed.query, keep_blank_values=True)
+    codes = params.get("code", [])
+    states = params.get("state", [])
+    if len(codes) != 1 or not codes[0].strip():
+        raise ProbeError(
+            "Callback URL must contain exactly one non-empty code parameter"
+        )
+    if len(states) != 1 or not states[0].strip():
+        raise ProbeError(
+            "Callback URL must contain exactly one non-empty state parameter"
+        )
+    return codes[0], states[0]
 
 
-def _save_oauth_token(payload: dict[str, Any]) -> dict[str, Any]:
-    expires_in = int(payload.get("expires_in", 0) or 0)
+def _prompt_callback_url() -> str:
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", getpass.GetPassWarning)
+            callback_url = getpass.getpass(
+                "Paste the full ANWB callback URL (input hidden): "
+            )
+    except getpass.GetPassWarning:
+        raise ProbeError(
+            "Secure callback input is unavailable in this terminal"
+        ) from None
+    except EOFError:
+        raise ProbeError("No callback URL was provided") from None
+    except KeyboardInterrupt:
+        raise ProbeError("Callback input was cancelled") from None
+
+    callback_url = callback_url.strip()
+    if not callback_url:
+        raise ProbeError("No callback URL was provided")
+    return callback_url
+
+
+def _save_oauth_token(
+    payload: dict[str, Any],
+    *,
+    operation: str,
+) -> dict[str, Any]:
     token = {
-        "access_token": payload["access_token"],
-        "refresh_token": payload.get("refresh_token"),
-        "id_token": payload.get("id_token"),
-        "expires_at": _utc_now_ts() + expires_in - 60,
-        "scope": payload.get("scope"),
-        "token_type": payload.get("token_type"),
+        "access_token": _required_credential(
+            payload,
+            "access_token",
+            operation=operation,
+        ),
+        "refresh_token": (
+            payload.get("refresh_token")
+            if isinstance(payload.get("refresh_token"), str)
+            else None
+        ),
+        "id_token": (
+            payload.get("id_token")
+            if isinstance(payload.get("id_token"), str)
+            else None
+        ),
+        "expires_at": _expires_at(
+            payload,
+            "expires_in",
+            operation=operation,
+        ),
+        "scope": (
+            payload.get("scope") if isinstance(payload.get("scope"), str) else None
+        ),
+        "token_type": (
+            payload.get("token_type")
+            if isinstance(payload.get("token_type"), str)
+            else None
+        ),
     }
     return token
 
@@ -195,15 +372,20 @@ def _save_oauth_token(payload: dict[str, Any]) -> dict[str, Any]:
 def _exchange_callback(callback_url: str) -> dict[str, Any]:
     state = _read_json(STATE_FILE)
     verifier = state.get("code_verifier")
-    if not verifier:
-        raise RuntimeError(f"Missing PKCE verifier. Run login-url first: {STATE_FILE}")
+    if not isinstance(verifier, str) or not verifier:
+        raise ProbeError(f"Missing PKCE verifier. Run login-url first: {STATE_FILE}")
 
     code, callback_state = _extract_code(callback_url)
     expected_state = state.get("state")
-    if expected_state and callback_state and callback_state != expected_state:
-        raise RuntimeError("Callback state does not match the saved login state")
+    if not isinstance(expected_state, str) or not expected_state:
+        raise ProbeError(f"Missing login state. Run login-url first: {STATE_FILE}")
+    if not secrets.compare_digest(
+        callback_state.encode("utf-8"),
+        expected_state.encode("utf-8"),
+    ):
+        raise ProbeError("Callback state does not match the saved login state")
 
-    status, payload = _request_json(
+    response = _request_json(
         "POST",
         TOKEN_URL,
         form={
@@ -214,11 +396,16 @@ def _exchange_callback(callback_url: str) -> dict[str, Any]:
             "code_verifier": verifier,
         },
     )
-    if status != 200:
-        raise RuntimeError(f"OAuth token exchange failed: HTTP {status} {payload}")
+    payload = _require_json_response(
+        response,
+        operation="OAuth token exchange",
+    )
 
     tokens = _read_json(TOKEN_FILE)
-    tokens["oauth"] = _save_oauth_token(payload)
+    tokens["oauth"] = _save_oauth_token(
+        payload,
+        operation="OAuth token exchange",
+    )
     tokens.pop("kraken", None)
     _write_secret_json(TOKEN_FILE, tokens)
     return tokens["oauth"]
@@ -228,9 +415,11 @@ def _refresh_oauth_token(tokens: dict[str, Any]) -> dict[str, Any]:
     oauth = tokens.get("oauth") or {}
     refresh_token = oauth.get("refresh_token")
     if not refresh_token:
-        raise RuntimeError("No refresh token cached. Run login-url and probe with callback.")
+        raise ProbeError(
+            "No refresh token cached. Run login-url, then probe with --callback."
+        )
 
-    status, payload = _request_json(
+    response = _request_json(
         "POST",
         TOKEN_URL,
         form={
@@ -239,10 +428,15 @@ def _refresh_oauth_token(tokens: dict[str, Any]) -> dict[str, Any]:
             "refresh_token": refresh_token,
         },
     )
-    if status != 200:
-        raise RuntimeError(f"OAuth refresh failed: HTTP {status} {payload}")
+    payload = _require_json_response(
+        response,
+        operation="OAuth refresh",
+    )
 
-    refreshed = _save_oauth_token(payload)
+    refreshed = _save_oauth_token(
+        payload,
+        operation="OAuth refresh",
+    )
     if not refreshed.get("refresh_token"):
         refreshed["refresh_token"] = refresh_token
     tokens["oauth"] = refreshed
@@ -271,18 +465,28 @@ def _get_kraken_token(access_token: str) -> str:
     if kraken.get("access_token") and kraken.get("expires_at", 0) > _utc_now_ts():
         return kraken["access_token"]
 
-    status, payload = _request_json(
+    response = _request_json(
         "POST",
         KRAKEN_TOKEN_URL,
         headers={"Authorization": f"Bearer {access_token}"},
     )
-    if status not in (200, 201):
-        raise RuntimeError(f"Kraken token exchange failed: HTTP {status} {payload}")
+    payload = _require_json_response(
+        response,
+        operation="Kraken token exchange",
+        expected_statuses=(200, 201),
+    )
 
-    expires_in = int(payload.get("expiresIn", 0) or 0)
     tokens["kraken"] = {
-        "access_token": payload["accessToken"],
-        "expires_at": _utc_now_ts() + expires_in - 60,
+        "access_token": _required_credential(
+            payload,
+            "accessToken",
+            operation="Kraken token exchange",
+        ),
+        "expires_at": _expires_at(
+            payload,
+            "expiresIn",
+            operation="Kraken token exchange",
+        ),
     }
     _write_secret_json(TOKEN_FILE, tokens)
     return tokens["kraken"]["access_token"]
@@ -301,21 +505,30 @@ def _get_account_number(kraken_token: str) -> str:
         }
       }
     }"""
-    status, payload = _request_json(
+    response = _request_json(
         "POST",
         GRAPHQL_URL,
         headers={"Authorization": f"Bearer {kraken_token}"},
         json_body={"query": query, "variables": {}},
     )
-    if status != 200:
-        raise RuntimeError(f"Account GraphQL query failed: HTTP {status} {payload}")
+    payload = _require_json_response(
+        response,
+        operation="Account GraphQL query",
+    )
     if payload.get("errors"):
-        raise RuntimeError(f"Account GraphQL query returned errors: {payload['errors']}")
+        raise ProbeError("Account GraphQL query returned errors")
 
     accounts = (((payload.get("data") or {}).get("viewer") or {}).get("accounts") or [])
     if not accounts:
-        raise RuntimeError("Account GraphQL query returned no accounts")
-    return accounts[0]["number"]
+        raise ProbeError("Account GraphQL query returned no accounts")
+
+    first_account = accounts[0]
+    if not isinstance(first_account, dict):
+        raise ProbeError("Account GraphQL query returned no usable account")
+    account_number = first_account.get("number")
+    if not isinstance(account_number, str) or not account_number:
+        raise ProbeError("Account GraphQL query returned no usable account")
+    return account_number
 
 
 def _local_today() -> date:
@@ -372,7 +585,7 @@ def _fetch_cache(
     endpoint: str,
     interval: str,
     window: ProbeWindow,
-) -> tuple[int, dict[str, Any]]:
+) -> JsonResponse:
     contract_start = date(window.start.year, 1, 1)
     url = (
         f"{ACCOUNT_CACHE_BASE}/{account_number}/{endpoint}/cache"
@@ -398,9 +611,9 @@ def _fetch_tariff_map(kind: str, start: date, end: date) -> dict[str, float]:
             f"&endDate={_date_time_end(day)}"
             "&interval=HOUR"
         )
-        status, payload = _request_json("GET", url)
-        if status == 200:
-            for row in payload.get("data") or []:
+        response = _request_json("GET", url)
+        if response.status == 200 and response.is_json_object:
+            for row in response.payload.get("data") or []:
                 key = _hour_key(row.get("date"))
                 all_in = (row.get("values") or {}).get("allInPrijs")
                 if key and all_in is not None:
@@ -487,6 +700,7 @@ def _summarize_rows(
         "start": window.start.isoformat(),
         "end": window.end.isoformat(),
         "http_status": status,
+        "outcome": "ok",
         "response_interval": payload.get("interval"),
         "unit": payload.get("unit"),
         "row_count": len(rows),
@@ -530,49 +744,60 @@ def _classify(results: list[dict[str, Any]]) -> dict[str, Any]:
     closed = [
         item
         for item in results
-        if item["window"] in {"previous_month", "current_year_closed_months", "previous_year"}
+        if item.get("window")
+        in {"previous_month", "current_year_closed_months", "previous_year"}
     ]
     any_nonzero_cost = any(
-        item["rows_with_nonzero_variabele_total"] or item["rows_with_nonzero_vaste_total"]
+        item.get("rows_with_nonzero_variabele_total", 0)
+        or item.get("rows_with_nonzero_vaste_total", 0)
         for item in results
     )
     closed_nonzero_cost = any(
-        item["rows_with_nonzero_variabele_total"] or item["rows_with_nonzero_vaste_total"]
+        item.get("rows_with_nonzero_variabele_total", 0)
+        or item.get("rows_with_nonzero_vaste_total", 0)
         for item in closed
     )
     day_or_month_nonzero = any(
-        item["interval"] in {"DAY", "MONTH"}
+        item.get("interval") in {"DAY", "MONTH"}
         and (
-            item["rows_with_nonzero_variabele_total"]
-            or item["rows_with_nonzero_vaste_total"]
+            item.get("rows_with_nonzero_variabele_total", 0)
+            or item.get("rows_with_nonzero_vaste_total", 0)
         )
         for item in results
     )
     hourly_nonzero = any(
-        item["interval"] == "HOUR"
+        item.get("interval") == "HOUR"
         and (
-            item["rows_with_nonzero_variabele_total"]
-            or item["rows_with_nonzero_vaste_total"]
+            item.get("rows_with_nonzero_variabele_total", 0)
+            or item.get("rows_with_nonzero_vaste_total", 0)
         )
         for item in results
     )
+    request_failures = sum(1 for item in results if item.get("outcome") != "ok")
 
     return {
         "any_cache_cost_fields_nonzero": any_nonzero_cost,
         "closed_period_cache_cost_fields_nonzero": closed_nonzero_cost,
         "day_or_month_cache_cost_fields_nonzero": day_or_month_nonzero,
         "hour_cache_cost_fields_nonzero": hourly_nonzero,
+        "request_failures": request_failures,
         "interpretation": (
-            "Cache cost fields were non-zero somewhere; inspect interval/window details."
-            if any_nonzero_cost
-            else "Cache cost fields were zero for all probed windows/intervals."
+            "One or more cache requests failed; conclusions are incomplete."
+            if request_failures
+            else (
+                "Cache cost fields were non-zero somewhere; "
+                "inspect interval/window details."
+                if any_nonzero_cost
+                else "Cache cost fields were zero for all probed windows/intervals."
+            )
         ),
     }
 
 
 def command_probe(args: argparse.Namespace) -> int:
     """Run sanitized probes and cache tokens locally."""
-    access_token = _get_oauth_token(args.callback_url)
+    callback_url = _prompt_callback_url() if args.prompt_for_callback else None
+    access_token = _get_oauth_token(callback_url)
     kraken_token = _get_kraken_token(access_token)
     account_number = _get_account_number(kraken_token)
 
@@ -587,17 +812,28 @@ def command_probe(args: argparse.Namespace) -> int:
     for window in _probe_windows(args.previous_year):
         for endpoint, tariff_kind in endpoints.items():
             for interval in window.intervals:
-                status, payload = _fetch_cache(
+                response = _fetch_cache(
                     account_number, kraken_token, endpoint, interval, window
                 )
-                if status != 200:
+                if response.status != 200:
                     results.append(
                         {
                             "endpoint": endpoint,
                             "interval": interval,
                             "window": window.name,
-                            "http_status": status,
-                            "error": payload,
+                            "http_status": _safe_http_status(response.status),
+                            "outcome": "http_error",
+                        }
+                    )
+                    continue
+                if not response.is_json_object:
+                    results.append(
+                        {
+                            "endpoint": endpoint,
+                            "interval": interval,
+                            "window": window.name,
+                            "http_status": _safe_http_status(response.status),
+                            "outcome": "invalid_response",
                         }
                     )
                     continue
@@ -616,8 +852,8 @@ def command_probe(args: argparse.Namespace) -> int:
                         endpoint,
                         interval,
                         window,
-                        status,
-                        payload,
+                        response.status,
+                        response.payload,
                         tariff_map,
                     )
                 )
@@ -629,7 +865,10 @@ def command_probe(args: argparse.Namespace) -> int:
         "results": results,
     }
     _ensure_probe_dir()
-    REPORT_FILE.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+    REPORT_FILE.write_text(
+        json.dumps(report, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
 
     print(json.dumps(report["classification"], indent=2, sort_keys=True))
     print(f"\nWrote sanitized report to ignored file: {REPORT_FILE}")
@@ -650,7 +889,7 @@ def command_clear(_: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the command-line parser."""
-    parser = argparse.ArgumentParser(
+    parser = SafeArgumentParser(
         description="Probe ANWB cache cost fields across historical granularities."
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -661,14 +900,15 @@ def build_parser() -> argparse.ArgumentParser:
     probe = subparsers.add_parser(
         "probe",
         help=(
-            "Exchange a callback URL if provided, cache tokens, and probe "
+            "Prompt for a callback URL if requested, cache tokens, and probe "
             "HOUR/DAY/MONTH cache cost behavior"
         ),
     )
     probe.add_argument(
-        "callback_url",
-        nargs="?",
-        help="Full ANWB callback URL. Omit to reuse/refresh cached tokens.",
+        "--callback",
+        dest="prompt_for_callback",
+        action="store_true",
+        help="Securely prompt for a full ANWB callback URL.",
     )
     probe.add_argument(
         "--previous-year",
@@ -695,8 +935,14 @@ def main() -> int:
     args = parser.parse_args()
     try:
         return args.func(args)
-    except Exception as err:  # noqa: BLE001
+    except ProbeError as err:
         print(f"error: {err}", file=sys.stderr)
+        return 1
+    except Exception:  # noqa: BLE001
+        print(
+            "error: probe failed unexpectedly; response details were not exposed",
+            file=sys.stderr,
+        )
         return 1
 
 

@@ -75,6 +75,7 @@ class MockConfigFlowBase:
             "type": "form",
             "step_id": step_id,
             "description_placeholders": description_placeholders,
+            "errors": errors,
         }
 
     def async_update_reload_and_abort(self, entry, data):
@@ -92,6 +93,50 @@ def flow():
     return f
 
 
+INVALID_CALLBACK_CASES = (
+    "missing_state",
+    "mismatched_state",
+    "foreign_scheme",
+    "foreign_host",
+    "foreign_path",
+    "userinfo",
+)
+
+
+def _authorization_params(form_result):
+    auth_url = form_result["description_placeholders"]["auth_url"]
+    parsed_auth_url = urllib.parse.urlsplit(auth_url)
+    return parsed_auth_url, {
+        key: values[0]
+        for key, values in urllib.parse.parse_qs(parsed_auth_url.query).items()
+    }
+
+
+def _callback_url(form_result, callback_case="valid"):
+    _, authorization = _authorization_params(form_result)
+    callback = urllib.parse.urlsplit(authorization["redirect_uri"])
+    query = [("code", "test-authorization-code")]
+
+    if callback_case != "missing_state":
+        state = authorization["state"]
+        if callback_case == "mismatched_state":
+            state = "different-state"
+        query.append(("state", state))
+
+    if callback_case == "foreign_scheme":
+        callback = callback._replace(scheme="http")
+    elif callback_case == "foreign_host":
+        callback = callback._replace(netloc="example.invalid")
+    elif callback_case == "foreign_path":
+        callback = callback._replace(path=f"{callback.path}/unexpected")
+    elif callback_case == "userinfo":
+        callback = callback._replace(netloc=f"test-user@{callback.netloc}")
+
+    return urllib.parse.urlunsplit(
+        callback._replace(query=urllib.parse.urlencode(query))
+    )
+
+
 @pytest.mark.asyncio
 async def test_full_flow(flow):
     """Check full flow."""
@@ -105,9 +150,10 @@ async def test_full_flow(flow):
     assert result["step_id"] == "user"
     assert "auth_url" in result["description_placeholders"]
 
-    auth_url = result["description_placeholders"]["auth_url"]
-    parsed_auth_url = urllib.parse.urlparse(auth_url)
+    form_result = result
+    parsed_auth_url, authorization = _authorization_params(form_result)
     assert parsed_auth_url.path.endswith("/authorize")
+    assert len(authorization["state"]) >= 40
 
     # Mock the HTTP response
     mock_resp = AsyncMock()
@@ -133,9 +179,7 @@ async def test_full_flow(flow):
         new_callable=AsyncMock,
     ):
         result = await flow.async_step_user(
-            {
-                "auth_code_url": "https://login.anwb.nl/49acae90-1d8b-46a5-943a-33da44624219/login/callback?code=abcd&state=1234"
-            }
+            {"auth_code_url": _callback_url(form_result)}
         )
 
     assert result["type"] == "create_entry"
@@ -143,6 +187,31 @@ async def test_full_flow(flow):
     assert result["data"]["auth_implementation"] == DOMAIN
     assert result["data"]["token"]["access_token"] == "mock-access-token"
     assert "expires_at" in result["data"]["token"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("callback_case", INVALID_CALLBACK_CASES)
+async def test_user_rejects_invalid_callback(flow, callback_case):
+    """Reject callbacks that are not bound to the user authorization request."""
+    with patch(
+        "custom_components.anwb_energie_account.config_flow.async_import_client_credential",
+        new_callable=AsyncMock,
+    ):
+        form_result = await flow.async_step_user()
+
+    with patch(
+        "custom_components.anwb_energie_account.config_flow.async_get_clientsession"
+    ) as get_session, patch(
+        "custom_components.anwb_energie_account.config_flow.async_import_client_credential",
+        new_callable=AsyncMock,
+    ):
+        result = await flow.async_step_user(
+            {"auth_code_url": _callback_url(form_result, callback_case)}
+        )
+
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "invalid_auth"}
+    get_session.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -157,6 +226,9 @@ async def test_reauth_flow(flow):
 
     assert result["type"] == "form"
     assert result["step_id"] == "reauth_confirm"
+    form_result = result
+    _, authorization = _authorization_params(form_result)
+    assert len(authorization["state"]) >= 40
 
     # Mock the HTTP response
     mock_resp = AsyncMock()
@@ -179,11 +251,30 @@ async def test_reauth_flow(flow):
         return_value=mock_session,
     ):
         result = await flow.async_step_reauth_confirm(
-            {
-                "auth_code_url": "https://login.anwb.nl/49acae90-1d8b-46a5-943a-33da44624219/login/callback?code=newcode"
-            }
+            {"auth_code_url": _callback_url(form_result)}
         )
 
     assert result["type"] == "abort"
     assert result["reason"] == "reauth_successful"
     assert result["data"]["token"]["access_token"] == "new-mock-access-token"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("callback_case", INVALID_CALLBACK_CASES)
+async def test_reauth_rejects_invalid_callback(flow, callback_case):
+    """Reject callbacks that are not bound to the reauthorization request."""
+    mock_entry = MagicMock()
+    flow.context = {"entry_id": "test_entry"}
+    flow.hass.config_entries.async_get_entry.return_value = mock_entry
+    form_result = await flow.async_step_reauth({})
+
+    with patch(
+        "custom_components.anwb_energie_account.config_flow.async_get_clientsession"
+    ) as get_session:
+        result = await flow.async_step_reauth_confirm(
+            {"auth_code_url": _callback_url(form_result, callback_case)}
+        )
+
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "invalid_auth"}
+    get_session.assert_not_called()

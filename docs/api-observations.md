@@ -136,8 +136,14 @@ python scripts/anwb_api_probe.py login-url
 Open the printed login URL, then run:
 
 ```bash
-python scripts/anwb_api_probe.py probe 'https://login.anwb.nl/.../callback?code=...'
+python scripts/anwb_api_probe.py probe --callback
 ```
+
+Paste the full callback URL at the hidden prompt. Do not pass it as a command-line
+argument, because callback authorization codes can otherwise be retained in shell
+history or exposed through the process list. Before exchanging the code, the probe
+validates the redirect origin and path and requires the returned state to match
+the saved login state.
 
 Subsequent runs can reuse or refresh cached tokens:
 
@@ -151,8 +157,10 @@ To include previous calendar-year monthly rows:
 python scripts/anwb_api_probe.py probe --previous-year
 ```
 
-The report is written to `.anwb-api-probe/last-report.json` and intentionally
-does not include account number, address, or bearer tokens.
+The report is written to `.anwb-api-probe/last-report.json`. It contains only
+allowlisted aggregate fields and request status context. Upstream error bodies are
+discarded and are never included in reports or error output. The report also
+intentionally excludes account number, address, and bearer tokens.
 
 Interpretation:
 
