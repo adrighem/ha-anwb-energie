@@ -12,5 +12,10 @@
 - Release Please automation only.
 - Local history at the 2026-07-29 baseline contains 13 bot commits.
 
+## @Eddict
+
+- Asked a clear question in ISSUE:17 about the undocumented `hasGap` field.
+- The question prompted a documented interpretation and mobile bundle check.
+
 Add notes for external contributors only when they materially participate in an
 issue or pull request.

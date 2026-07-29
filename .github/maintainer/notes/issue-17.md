@@ -1,6 +1,6 @@
 # ISSUE:17 - HasGap semantics
 
-Status: Open
+Status: Closed as answered on 2026-07-29
 
 Type: User question
 
@@ -22,6 +22,8 @@ undocumented `hasGap` field most likely represents.
 - ANWB explains that missing smart-meter readings can arrive later or be
   distributed over the missing period using a standard usage profile.
 - No official field definition or independent public implementation was found.
+- The ANWB Energie React Native bundle contains `hasGap` once as an interned
+  property name, but has no explanatory copy or established transformation.
 - No duplicate or related repository issue was found.
 
 ## Interpretation
@@ -34,12 +36,14 @@ aggregate row still contains usable usage.
 Unknowns include the exact threshold, whether the flag distinguishes partial,
 estimated, or backfilled data, and how it propagates across HOUR, DAY, and MONTH.
 
-## Recommendation
+## Resolution
 
-Add the `question` label, answer with the verified limits and the best inference,
-then close as answered. Public action requires maintainer approval.
+After explicit maintainer approval, posted the informed interpretation in
+[ISSUE:17:C:1](https://github.com/adrighem/ha-anwb-energie/issues/17#issuecomment-5116067281)
+and closed the issue as completed. Do not change integration behavior based on
+`hasGap` without an official definition or stronger observations.
 
-## Public Draft
+## Published Reply
 
 Hi Eddict, good question. I could not find an official definition, so this is
 still an informed interpretation.

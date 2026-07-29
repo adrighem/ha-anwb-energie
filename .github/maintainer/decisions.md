@@ -57,3 +57,12 @@ status context, and create local secret files with mode `0600` before writing.
 
 Evidence: `scripts/anwb_api_probe.py`, `docs/api-observations.md`, and
 `tests/test_anwb_api_probe.py`.
+
+## 2026-07-29: `hasGap` semantics
+
+Treat `hasGap` only as an advisory completeness or provenance signal. Do not
+discard otherwise usable account-cache rows or change calculations based on the
+field without an official definition or stronger observations.
+
+Evidence: authenticated observations, ANWB's missing-meter-data explanation,
+the mobile bundle inspection, and the resolution of ISSUE:17.

@@ -1,14 +1,14 @@
 {
   "schema": "maintainer-bootstrap/v1",
   "repository": "adrighem/ha-anwb-energie",
-  "captured_at": "2026-07-29T09:56:44+02:00",
-  "head": "45a92143f672521f71f149d32a2ae8ced91299e6",
+  "captured_at": "2026-07-29T11:52:39+02:00",
+  "head": "53518afea30c75996c865535d44c0ca2cba796ee",
   "github": {
     "latest_release": "v1.3.2",
-    "open_issues": [
-      17
+    "open_issues": [],
+    "open_pull_requests": [
+      18
     ],
-    "open_pull_requests": [],
     "open_dependabot_alerts": 0,
     "open_code_scanning_alerts": 0,
     "open_secret_scanning_alerts": 0,

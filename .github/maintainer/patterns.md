@@ -9,3 +9,5 @@
 - Entity migrations must preserve user-managed compatibility aliases.
 - Conventional commits feed Release Please and should describe user-visible
   fixes or features accurately.
+- Mobile bundle property names can confirm that an API field reaches the
+  official client, but runtime observations are stronger evidence of semantics.
