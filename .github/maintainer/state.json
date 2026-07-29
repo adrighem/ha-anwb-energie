@@ -1,0 +1,27 @@
+{
+  "schema": "maintainer-bootstrap/v1",
+  "repository": "adrighem/ha-anwb-energie",
+  "captured_at": "2026-07-29T09:56:44+02:00",
+  "head": "45a92143f672521f71f149d32a2ae8ced91299e6",
+  "github": {
+    "latest_release": "v1.3.2",
+    "open_issues": [
+      17
+    ],
+    "open_pull_requests": [],
+    "open_dependabot_alerts": 0,
+    "open_code_scanning_alerts": 0,
+    "open_secret_scanning_alerts": 0,
+    "unread_repository_notifications": 0,
+    "latest_main_checks": "green"
+  },
+  "local_validation": {
+    "captured_at": "2026-07-29T10:18:22+02:00",
+    "pytest": "168 passed",
+    "ruff": "passed",
+    "compileall": "passed",
+    "json": "passed",
+    "diff_check": "passed"
+  },
+  "compatibility_note": "Manual sentinel schema. Migrate when the maintainer triage script and its state schema are restored."
+}
