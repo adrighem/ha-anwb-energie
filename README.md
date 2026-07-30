@@ -1,167 +1,270 @@
 <p align="center">
-  <img src="icon.svg" width="150" alt="ANWB Energie Account Logo">
+  <img
+    src="icon.svg"
+    width="150"
+    alt="ANWB Energie Account integration icon"
+  >
 </p>
 
 # ANWB Energie Account for Home Assistant
 
-A custom component for Home Assistant that natively integrates your ANWB Energie
-account. It securely fetches electricity consumption and production data and
-calculates tariff-estimated costs.
+An unofficial Home Assistant custom integration for Dutch ANWB Energie
+customers. It imports electricity and gas usage, exposes dynamic tariffs, and
+calculates tariff-based cost estimates for dashboards and long-term statistics.
 
-## Features
-*   **Native Energy Dashboard Support:** Seamlessly integrates with the built-in Home Assistant Energy dashboard.
-*   **Hourly & Daily Statistics:** Import and export usage and tariff-estimated costs are automatically added to Long-Term Statistics.
-*   **Current Dynamic Price Sensors:** Provides the current hourly all-in electricity price and bare market electricity price, along with today's and tomorrow's prices as attributes for charting (e.g., via ApexCharts).
-*   **Month-to-Date & Year-to-Date Overviews:** Dedicated sensors for current month and year totals.
-*   **Diagnostics Support:** Download redacted diagnostics natively from the UI to easily share bug reports.
-*   **Official Translation Support:** Fully supports English and Dutch seamlessly through Home Assistant's translation engine.
+This project is not affiliated with or supported by ANWB. It depends on ANWB's
+cloud services and undocumented account APIs, which may change without notice.
 
-## Energy Dashboard Setup
+[Releases](https://github.com/adrighem/ha-anwb-energie/releases) |
+[Changelog](CHANGELOG.md) |
+[Issues](https://github.com/adrighem/ha-anwb-energie/issues) |
+[GPL-3.0 license](LICENSE)
 
-To configure the built-in Home Assistant Energy Dashboard with your ANWB
-Energie data, navigate to **Settings** -> **Dashboards** -> **Energy** and use
-the canonical entities below.
+## What it provides
 
-Home Assistant translates entity names when it creates them. The English names
-below may appear in your Home Assistant language, and the generated `sensor.*`
-entity IDs may be localized as well. Select the entities by their displayed
-meaning, and prefer these canonical entities if older legacy names also exist.
+- Electricity import and export totals for the current month and year.
+- Gas totals for the current month and year when a gas contract is detected.
+- Estimated variable usage costs and export values based on matching tariffs.
+- Current all-in electricity and gas prices, plus the bare electricity market
+  price.
+- Price schedules for today and, when ANWB publishes them, tomorrow.
+- Imported hourly usage and cost statistics for the Energy dashboard.
+- English and Dutch entity translations.
+- Redacted diagnostics for troubleshooting.
 
-### Electricity grid
+The integration is read-only. It provides sensors and statistics, but no
+control actions.
 
-| Energy Dashboard field | Select |
+## Requirements and scope
+
+- Home Assistant 2026.3.0 or newer.
+- An active ANWB Energie account.
+- Internet access from Home Assistant and browser access to the ANWB login page.
+- One ANWB account per Home Assistant instance.
+
+If an ANWB login has multiple active energy accounts, the integration currently
+uses the first account returned by ANWB. There is no account selector.
+
+## Installation
+
+### HACS
+
+[![Open your Home Assistant instance and open this repository in HACS.][hacs-badge]][hacs-link]
+
+This integration is included in the default HACS repository list.
+
+1. Open the link above, or open HACS and search for **ANWB Energie Account**.
+2. Open the repository and select **Download**.
+3. Select the latest version.
+4. Restart Home Assistant.
+
+### Manual installation
+
+1. Download the source archive for the
+   [latest release](https://github.com/adrighem/ha-anwb-energie/releases/latest).
+2. Copy `custom_components/anwb_energie_account` into the
+   `/config/custom_components` directory on your Home Assistant instance.
+3. Confirm that
+   `/config/custom_components/anwb_energie_account/manifest.json` exists.
+4. Restart Home Assistant.
+
+Manual installations do not receive update notifications from HACS.
+
+## Configuration
+
+1. Go to **Settings** > **Devices & services**.
+2. Select **Add integration** and search for **ANWB Energie Account**.
+3. Open the generated login link in your browser.
+4. Sign in on the ANWB page.
+5. ANWB redirects the browser to a blank or error page. This is expected.
+6. Copy the entire URL from the browser address bar and paste it into the
+   original Home Assistant setup form.
+7. Submit the form.
+
+> **Security:** The redirected URL contains a short-lived authorization code and
+> login transaction data. Paste it only into the active Home Assistant setup
+> form. Never share it in an issue, log, screenshot, or message. If setup is
+> interrupted, start a new flow instead of reusing the URL.
+
+Configuration is UI-only. No YAML or separate API credentials are required.
+
+## Data updates
+
+| Data | Refresh behavior |
 | --- | --- |
-| Grid consumption | `Electricity import year to date` |
-| Return to grid | `Electricity export year to date` |
-| Cost tracking for grid consumption | Select **"Use an entity with current price"** and choose `Electricity current all-in price` |
-| Compensation tracking for return to grid | No single current-price entity is exact under 2026 annual saldering; see below |
+| Account usage | Polled every 6 hours from ANWB's account cache. It is not real-time meter data. |
+| Tariffs | Checked every 30 minutes. The current-price sensor advances from the cached schedule on each hour. |
+| Tomorrow's electricity tariffs | Requested after 13:00 local time and exposed when ANWB has published a complete schedule. |
+| Tomorrow's gas tariffs | Requested after 06:00 local time and exposed when ANWB has published a complete schedule. |
 
-For import, the all-in price is the appropriate current price. For export, the
-all-in price applies only to the portion that is eventually saldered against
-annual import. The bare market price is appropriate only for annual surplus
-export. Home Assistant cannot split one export meter between those portions as
-the year develops, so leave export compensation unset unless you deliberately
-accept one of those approximations. The integration's month-to-date estimated
-export value uses the all-in price and is therefore not a final-bill amount.
+The integration retains complete public tariffs for closed periods so restarts
+and temporary API failures do not force the same tariff data to be fetched
+again.
+
+## Entities
+
+The names below are the English display names. Home Assistant may translate
+them and may generate localized `sensor.*` entity IDs. Find the exact IDs for
+your installation under **Settings** > **Devices & services** > **Entities**.
+
+### Electricity
+
+| Entity | Unit | Description |
+| --- | --- | --- |
+| `Electricity import month to date` | kWh | Imported electricity in the current calendar month. |
+| `Electricity export month to date` | kWh | Exported electricity in the current calendar month. |
+| `Electricity import year to date` | kWh | Imported electricity in the current calendar year. |
+| `Electricity export year to date` | kWh | Exported electricity in the current calendar year. |
+| `Estimated electricity import usage cost month to date` | € | Variable import cost estimated from hourly usage and all-in tariffs. |
+| `Estimated electricity export value month to date` | € | Export value estimated from hourly export and all-in tariffs. |
+| `Estimated electricity import usage cost year to date` | € | Estimated variable import cost for the current year. |
+| `Estimated electricity export value year to date` | € | Estimated export value for the current year. |
+| `Electricity current all-in price` | €/kWh | Current all-in tariff. The `prices` attribute contains available schedules. |
+| `Electricity current bare market price` | €/kWh | Current bare market price without the other all-in components. |
 
 ### Gas
 
-| Energy Dashboard field | Select |
-| --- | --- |
-| Gas consumption | `Gas usage year to date` |
-| Gas cost tracking | Select **"Use an entity with current price"** and choose `Gas current all-in price` |
+Gas entities are created only when current-month or year-to-date account data
+indicates that the account has gas. They are added automatically if gas is
+detected later.
 
-Do not use month-to-date usage or cost entities, or calculated total-cost
-helpers, in the Energy Dashboard configuration. They are useful for overview
-cards, but the Energy Dashboard should use the year-to-date usage entities and
-current price entities.
-
-> **⚠️ Note:** After installing the integration, it can take up to two hours for Home Assistant to generate the initial statistics. The sensors may not appear in the Energy Dashboard dropdown menus immediately. If they are missing, please wait a while and try again.
-
-## Entity Model
-
-New installs expose explicitly named canonical entities. Gas entities are
-created only when current-month or year-to-date gas data indicates that the
-account has gas, and are added automatically if gas is detected later.
-Transient API gaps do not remove registered entities. Previously registered gas
-entities are preserved but become unavailable when contract revalidation no
-longer infers that the account has gas.
-
-The API data used here does not expose an explicit gas-contract flag, so gas
-applicability is inferred from current-month and year-to-date cache data and is
-revalidated when a new year starts.
-
-Older entity names such as `Yearly import usage`, `Monthly import usage`, and
-`Current electricity price` are compatibility aliases. Clean installs do not
-create them. Enabled and user-managed registered aliases remain available so
-dashboards and automations do not break; untouched aliases that were still
-disabled by the integration are removed. The estimated fixed-charge and
-combined-total entities are also compatibility-only because their fixed-charge
-fallback is not account-specific. For account-specific totals on a clean
-installation, see [Calculating total energy costs](docs/cost-calculations.md).
-
-If an upgraded installation still shows both names, the legacy entity mirrors
-the canonical value. Check its automations, dashboards, and history before
-disabling or removing it; the integration does not disable an actively
-registered alias automatically.
-
-| Entity | Clean install | Meaning |
+| Entity | Unit | Description |
 | --- | --- | --- |
-| `Estimated electricity import usage cost month to date` | Yes | Current-month `HOUR` usage multiplied by matching all-in `HOUR` tariffs; complete closed local days come from the persisted integration-local tariff cache, while the open day remains refreshable |
-| `Estimated electricity export value month to date` | Yes | Current-month `HOUR` export multiplied by matching all-in `HOUR` tariffs, with the same closed-day cache policy; not the final 2026 export compensation after annual saldering |
-| `Estimated electricity import usage cost year to date` | Yes | The current-month `HOUR` estimate plus completed prior months calculated from `DAY` usage and persisted `DAY` tariffs; January is `HOUR`-only |
-| `Estimated electricity export value year to date` | Yes | The current-month `HOUR` estimate plus completed prior months calculated from `DAY` usage and persisted `DAY` tariffs; not the final annual-settlement value |
-| `Estimated electricity fixed charges month to date` | No, compatibility only | Non-zero fixed components from the ANWB account cache, otherwise the hardcoded fallback prorated through the current calendar day |
-| `Estimated electricity net cost month to date` | No, compatibility only | Import usage cost minus export value plus fixed charges |
-| `Electricity current all-in price` | Yes | Current tariff including the components used for import cost tracking |
-| `Electricity current bare market price` | Yes | Current bare `marktprijs`, excluding the other all-in components |
-| `Estimated gas usage cost month to date` | Gas accounts | Current-month `HOUR` usage multiplied by matching all-in `HOUR` tariffs, with complete closed local days read from the persisted integration-local tariff cache |
-| `Estimated gas usage cost year to date` | Gas accounts | The current-month `HOUR` estimate plus completed prior months calculated from `DAY` usage and persisted `DAY` tariffs; January is `HOUR`-only |
-| `Estimated gas fixed charges month to date` | No, compatibility only | Non-zero fixed components from current-month gas data, otherwise the hardcoded fallback prorated through the current calendar day; unavailable when current gas applicability cannot be confirmed |
-| `Estimated gas total cost month to date` | No, compatibility only | Gas usage cost plus gas fixed charges |
-| `Gas current all-in price` | Gas accounts | Current all-in gas tariff |
+| `Gas usage month to date` | m³ | Gas usage in the current calendar month. |
+| `Gas usage year to date` | m³ | Gas usage in the current calendar year. |
+| `Estimated gas usage cost month to date` | € | Variable gas cost estimated from usage and matching all-in tariffs. |
+| `Estimated gas usage cost year to date` | € | Estimated variable gas cost for the current year. |
+| `Gas current all-in price` | €/m³ | Current all-in gas tariff. The `prices` attribute contains available schedules. |
 
-The hardcoded full-month fallback is currently €8.50 delivery charges, €39.73
-network charges, and −€52.41 energy-tax reduction for electricity; for gas it is
-€8.50 delivery charges plus €17.50 network charges. These values may not match
-the account, network region, or current contract. The fixed-charge entity
-identifies whether ANWB account-cache values or the hardcoded fallback were used.
-The `fixed_cost_source` attribute reports these as `account_cache` and
+ANWB does not expose an explicit gas-contract flag through the data used by the
+integration. Gas availability is inferred from account data and revalidated at
+the start of a new year. Temporary API gaps do not remove registered entities.
+
+### Long-term statistics
+
+The integration imports separate hourly statistics for:
+
+- electricity import and export usage;
+- estimated electricity import cost and export value; and
+- gas usage and estimated gas cost, when applicable.
+
+Their display names start with `ANWB Account <account number>`. Raw statistic
+IDs start with `anwb_energie_account:` and can be found under
+**Developer tools** > **Statistics**.
+
+On first installation, hourly statistics are backfilled for the current
+calendar month. Older months are not rebuilt automatically. Daily, monthly, and
+yearly views in Home Assistant are aggregates of those hourly statistics.
+
+If the statistics are not visible immediately, allow the initial ANWB refresh
+and one Recorder statistics cycle to complete. Also confirm that Recorder is
+not configured to exclude the integration's sensors.
+
+## Energy dashboard
+
+Go to **Settings** > **Dashboards** > **Energy**. Use the imported ANWB
+statistics so hourly usage and its matching tariff stay aligned.
+
+### Electricity grid
+
+| Energy setting | Select |
+| --- | --- |
+| Grid consumption | `ANWB Account <account number> Import Usage` |
+| Grid consumption cost | Select **Use an entity tracking total costs**, then `ANWB Account <account number> Import Cost` |
+| Return to grid | `ANWB Account <account number> Export Usage` |
+| Return compensation | Select **Use an entity tracking total costs**, then `ANWB Account <account number> Export Cost`, only if you accept the export estimate described below |
+
+### Gas source
+
+| Energy setting | Select |
+| --- | --- |
+| Gas consumption | `ANWB Account <account number> Gas Usage` |
+| Gas cost | Select **Use an entity tracking total costs**, then `ANWB Account <account number> Gas Cost` |
+
+Do not use **Use an entity with current price** with the ANWB usage entities.
+Usage arrives in six-hour batches, so Home Assistant would apply one current
+price to a multi-hour usage change. The imported cost statistics instead match
+each usage interval to its tariff.
+
+Do not select month-to-date or year-to-date overview sensors as substitutes for
+the imported hourly statistics. Those sensors are intended for entity cards,
+automations, and summary dashboards.
+
+### Export compensation
+
+The integration's export statistic and export-value entities apply the all-in
+tariff to every exported kWh. They are estimates, not final-settlement values.
+
+The Dutch annual net-metering scheme applies through 31 December 2026 and
+[ends on 1 January 2027][net-metering]. The integration does not split annual
+export into netted and surplus portions, and it does not model contract-specific
+settlement rules from 2027 onward. Leave return compensation unset if exact
+invoice reconciliation matters.
+
+## Cost estimates
+
+All cost entities and imported cost statistics are tariff estimates. They are
+not amounts billed by ANWB.
+
+- Month-to-date values match `HOUR` usage to `HOUR` all-in tariffs.
+- Year-to-date values combine the current month's hourly calculation with
+  `DAY` usage and tariffs for completed prior months.
+- January has no completed prior month, so its year-to-date estimate uses only
+  hourly data.
+- Every non-zero usage interval must have a matching tariff.
+- Current-month and prior-month usage aggregates must agree within a small
+  rounding tolerance.
+
+If coverage or reconciliation is incomplete, the affected estimate becomes
+unavailable instead of silently treating missing prices as zero. Failed or
+partial tariff responses remain retryable and do not overwrite valid cached
+tariffs.
+
+Clean installations do not create combined total-cost sensors with generic
+fixed charges. Use the [cost calculation guide](docs/cost-calculations.md) to
+build account-specific totals from the charges on your contract or invoice.
+That guide also documents the formulas and availability behavior in more
+detail.
+
+### Upgrades and legacy entities
+
+Older names such as `Yearly import usage`, `Monthly import usage`, and
+`Current electricity price` are compatibility aliases. Clean installations do
+not create them. User-enabled or user-managed aliases remain available so
+existing dashboards and automations continue to work. Untouched aliases that
+were still disabled by the integration are removed.
+
+Fixed-charge and combined-total entities are also compatibility-only. When a
+usable account-cache fixed-charge total is unavailable, their full-month
+fallback is:
+
+- electricity: €8.50 delivery charges, €39.73 network charges, and
+  -€52.41 energy-tax reduction;
+- gas: €8.50 delivery charges and €17.50 network charges.
+
+These values may not match the account, network region, or current contract.
+The `fixed_cost_source` attribute reports either `account_cache` or
 `hardcoded_fallback`.
 
-All usage costs and export values are tariff estimates, not provider-billed
-amounts. Authenticated API checks found zero cost fields even alongside non-zero
-usage, so the integration combines ANWB account-cache usage with public `HOUR`
-and `DAY` tariff data. A persisted integration-local tariff cache is shared by
-the pricing and consumption coordinators and survives integration reloads and
-Home Assistant restarts. Month-to-date estimates reuse complete, finite `HOUR`
-tariffs for closed local days while the open day remains refreshable.
-Year-to-date estimates reuse that current-month calculation and add completed
-prior months using persisted finite `DAY` tariffs. Every non-zero usage day
-must have a matching tariff before the estimate is published. January therefore
-has no `DAY` component.
+Review dashboards, automations, and history before removing a legacy entity.
 
-Only public tariff data is persisted in this cache, never account usage or
-credentials. Failed, empty, or partial responses remain retryable and do not
-evict valid cached tariffs or mark an incomplete period as complete. If any
-non-zero usage interval lacks its matching tariff, strict coverage makes the
-affected estimate unavailable instead of treating the missing price as €0. A
-current-month cost is also unavailable when its `HOUR` usage total disagrees
-with an available current `MONTH` aggregate beyond the documented rounding
-tolerance. A net total is unavailable when one of its required variable
-estimates is incomplete.
+## Example dashboards
 
-Transient ANWB gas account-cache failures reuse valid values only within the
-same month or year. At a period rollover, affected gas entities remain
-unavailable until new period data arrives rather than publishing the previous
-period as current.
+These examples require the
+[ApexCharts Card](https://github.com/RomRider/apexcharts-card), installed
+separately through HACS. Add a **Manual** card to a dashboard and paste the
+example YAML.
 
-External cost statistics can repair incorrect €0 rows from an earlier version
-when the matching hourly usage is still returned by the current-month ANWB
-account-cache request and its `HOUR` tariff is available from either the
-persisted closed-day cache or the refreshable open-day range. Older months are
-not rebuilt automatically because the integration does not refetch their
-hourly usage during normal updates.
+Replace each `sensor.your_account_*` placeholder with the matching entity ID
+from **Settings** > **Devices & services** > **Entities**. For the historic
+usage example, find the exact `anwb_energie_account:*` IDs under
+**Developer tools** > **Statistics** and replace the example IDs.
 
-## Cost Calculations
+![Bar chart of lower and higher hourly electricity prices across one day.](docs/electricity_prices.png)
 
-Clean installs expose month-to-date and year-to-date variable usage costs and
-export values, but not combined totals with generic fixed charges. The
-[cost calculation guide](docs/cost-calculations.md) explains the formulas and
-shows how to create account-specific electricity and gas totals with Home
-Assistant helpers.
+<details>
+<summary>Electricity prices</summary>
 
-## Example Dashboards
-
-Using the popular [ApexCharts Card](https://github.com/RomRider/apexcharts-card), you can create beautiful graphs that color-code the current electricity and gas prices.
-Replace each `sensor.your_account_*` placeholder with the entity ID of the
-matching canonical entity in your installation. In the historic-usage example,
-also replace each `a_xxxxxxxx` suffix in the `anwb_energie_account:*`
-statistics IDs with the normalized suffix shown for your account.
-
-![Electricity Prices](docs/electricity_prices.png)
-
-### Electricity Prices
 ```yaml
 type: custom:apexcharts-card
 experimental:
@@ -181,7 +284,7 @@ series:
   - entity: sensor.your_account_electricity_current_all_in_price
     type: column
     data_generator: |
-      return entity.attributes.prices.map((record) => {
+      return (entity.attributes.prices ?? []).map((record) => {
         return [new Date(record.start_time).getTime(), record.price];
       });
     color_threshold:
@@ -199,7 +302,13 @@ series:
         color: '#E91E63'
 ```
 
-### Gas Prices
+Set `graph_span: 48h` to include tomorrow after ANWB publishes the schedule.
+
+</details>
+
+<details>
+<summary>Gas prices</summary>
+
 ```yaml
 type: custom:apexcharts-card
 experimental:
@@ -219,7 +328,7 @@ series:
   - entity: sensor.your_account_gas_current_all_in_price
     type: column
     data_generator: |
-      return entity.attributes.prices.map((record) => {
+      return (entity.attributes.prices ?? []).map((record) => {
         return [new Date(record.start_time).getTime(), record.price];
       });
     color_threshold:
@@ -237,7 +346,11 @@ series:
         color: '#E91E63'
 ```
 
-### Historic Usage (Yesterday)
+</details>
+
+<details>
+<summary>Yesterday's electricity import and export</summary>
+
 ```yaml
 type: custom:apexcharts-card
 header:
@@ -256,34 +369,133 @@ series:
     type: column
     color: '#3498db'
     data_generator: |
-      const stats = await hass.callWS({ type: 'recorder/statistics_during_period', start_time: start.toISOString(), end_time: end.toISOString(), statistic_ids: ['anwb_energie_account:import_usage_a_xxxxxxxx'], period: 'hour' });
-      const data = stats['anwb_energie_account:import_usage_a_xxxxxxxx'] || [];
-      return data.map(s => [s.start, s.state]);
+      const statisticId =
+        'anwb_energie_account:import_usage_a_xxxxxxxx';
+      const stats = await hass.callWS({
+        type: 'recorder/statistics_during_period',
+        start_time: start.toISOString(),
+        end_time: end.toISOString(),
+        statistic_ids: [statisticId],
+        period: 'hour',
+      });
+      return (stats[statisticId] ?? []).map((row) => [
+        row.start,
+        row.state,
+      ]);
   - entity: sensor.your_account_electricity_export_month_to_date
     name: Export
     type: column
     color: '#f1c40f'
     invert: true
     data_generator: |
-      const stats = await hass.callWS({ type: 'recorder/statistics_during_period', start_time: start.toISOString(), end_time: end.toISOString(), statistic_ids: ['anwb_energie_account:export_usage_a_xxxxxxxx'], period: 'hour' });
-      const data = stats['anwb_energie_account:export_usage_a_xxxxxxxx'] || [];
-      return data.map(s => [s.start, s.state]);
+      const statisticId =
+        'anwb_energie_account:export_usage_a_xxxxxxxx';
+      const stats = await hass.callWS({
+        type: 'recorder/statistics_during_period',
+        start_time: start.toISOString(),
+        end_time: end.toISOString(),
+        statistic_ids: [statisticId],
+        period: 'hour',
+      });
+      return (stats[statisticId] ?? []).map((row) => [
+        row.start,
+        row.state,
+      ]);
 ```
 
-## Installation
+</details>
 
-Requires Home Assistant 2026.3.0 or newer.
+## Privacy and security
 
-### HACS (Recommended)
-1. Open HACS in your Home Assistant instance.
-2. Search for **ANWB Energie Account**.
-3. Click the three-dot menu.
-4. Select **Download**.
-5. Restart Home Assistant.
+- Authentication takes place on ANWB's login page. The integration does not
+  collect the ANWB password.
+- Home Assistant stores the OAuth tokens in the integration's config entry.
+- The integration's own persistent tariff cache contains public tariff data
+  only, not account usage or credentials.
+- Home Assistant Recorder stores entity history and the imported usage and cost
+  statistics according to the instance's Recorder configuration.
+- Diagnostics redact known account identifiers, addresses, and tokens. Always
+  inspect a diagnostics file before sharing it publicly.
 
-## Configuration
-1. Go to **Settings** -> **Devices & Services** -> **Add Integration**.
-2. Search for **ANWB Energie Account**.
-3. You will be provided with a login link. Click it to open the ANWB portal in your browser.
-4. Log in with your ANWB account.
-5. You will be redirected to a blank or error page. This is normal. **Copy the entire URL from your browser's address bar** and paste it back into Home Assistant.
+## Troubleshooting and support
+
+### The integration is not available after installing it
+
+Confirm that Home Assistant is version 2026.3.0 or newer, that HACS completed
+the download, and that Home Assistant was restarted afterward.
+
+### Login fails or the callback URL is rejected
+
+Start a new configuration or reauthentication flow and use the callback URL
+generated by that same flow. The URL contains one-time transaction values and
+must not be reused or edited.
+
+### An entity or statistic is missing from the Energy dashboard
+
+Wait for the initial account refresh and a Recorder statistics cycle. Then
+check **Developer tools** > **Statistics** for the ANWB statistic and any
+reported issue. Also confirm that Recorder is not excluding the integration's
+sensors. Home Assistant's
+[missing Energy entity checklist][energy-troubleshooting] covers the required
+device class, state class, unit, and statistics checks.
+
+### A cost estimate is unavailable
+
+This normally means that usage is missing a matching tariff or that ANWB's
+hourly, daily, and monthly aggregates do not reconcile. Wait for the next
+scheduled refresh. If the problem persists, reload the integration and inspect
+its diagnostics.
+
+### Gas entities are missing
+
+Gas entities appear only after current-month or year-to-date ANWB data indicates
+a gas contract. They are added automatically when gas is detected. If the ANWB
+portal shows gas data but the entities remain absent after a refresh, include
+diagnostics in an issue.
+
+### Reporting an issue
+
+1. Go to **Settings** > **Devices & services**.
+2. Open **ANWB Energie Account**.
+3. Open the three-dot menu and select **Download diagnostics**.
+4. Review the file and remove anything you do not want to share.
+5. Open a [GitHub issue](https://github.com/adrighem/ha-anwb-energie/issues)
+   with the integration version, Home Assistant version, symptoms, relevant
+   log messages, and diagnostics.
+
+Never include an ANWB login URL, callback URL, authorization code, or token.
+
+## Removal
+
+1. Go to **Settings** > **Devices & services**.
+2. Open **ANWB Energie Account**, open the three-dot menu, and select
+   **Delete**.
+3. In HACS, open the repository, open its three-dot menu, and select
+   **Remove**.
+4. Restart Home Assistant.
+
+Removing the integration does not purge existing Home Assistant history,
+external statistics, backups, or the integration's persisted public tariff
+cache. Manage Recorder retention separately if those records also need to be
+removed.
+
+## Development
+
+Contributions are welcome. The repository uses Python 3.14 in CI. Before
+opening a pull request, run:
+
+```bash
+python -m pip install -r requirements_test.txt
+python -m ruff check .
+python -m pytest
+python -m compileall custom_components tests
+```
+
+Implementation notes about the undocumented ANWB API are in
+[docs/api-observations.md](docs/api-observations.md). The observed schema is in
+[openapi.yaml](openapi.yaml).
+
+[hacs-badge]: https://my.home-assistant.io/badges/hacs_repository.svg
+[hacs-link]: https://my.home-assistant.io/redirect/hacs_repository/?owner=adrighem&repository=ha-anwb-energie&category=integration
+[net-metering]: https://www.rijksoverheid.nl/themas/klimaat-milieu-en-natuur/energie-thuis/salderingsregeling
+[energy-troubleshooting]: https://www.home-assistant.io/docs/energy/faq/#troubleshooting-missing-entities
