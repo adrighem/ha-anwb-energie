@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.3](https://github.com/adrighem/ha-anwb-energie/compare/v1.3.2...v1.3.3) (2026-07-30)
+
+
+### Bug Fixes
+
+* harden authentication and diagnostics ([b9594de](https://github.com/adrighem/ha-anwb-energie/commit/b9594debea6ce6a86652a294c744c7d9c5d1021d))
+
 ## [1.3.2](https://github.com/adrighem/ha-anwb-energie/compare/v1.3.1...v1.3.2) (2026-07-28)
 
 
