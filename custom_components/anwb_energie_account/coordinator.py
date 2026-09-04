@@ -10,7 +10,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from aiohttp.client_exceptions import ClientError
 from homeassistant.components.recorder import get_instance
@@ -45,7 +44,6 @@ from .const import (
 from .tariff_cache import Commodity, HourlyTariffData, TariffCache
 
 _LOGGER = logging.getLogger(__name__)
-_ANWB_TARIFF_TIME_ZONE = ZoneInfo("Europe/Amsterdam")
 
 _DNS_FAILURE_MARKERS = (
     "dns",
@@ -164,17 +162,10 @@ def _account_cache_query_boundaries(now: datetime) -> tuple[str, str, str]:
     )
 
 
-def _local_day_tariff_range(local_day: date) -> tuple[str, str]:
-    """Return ANWB's date-labelled range for one Amsterdam tariff day."""
-    day_label = local_day.isoformat()
-    return (
-        f"{day_label}T00:00:00.000Z",
-        f"{day_label}T23:59:59.999Z",
-    )
 
 
 def _provider_tariff_dates_for_local_day(local_day: date) -> tuple[date, ...]:
-    """Return ANWB day labels containing a Home Assistant local day."""
+    """Return UTC calendar dates containing a Home Assistant local day."""
     local_tz = _configured_time_zone()
     start = datetime.combine(local_day, time.min, tzinfo=local_tz).astimezone(
         timezone.utc
@@ -187,11 +178,11 @@ def _provider_tariff_dates_for_local_day(local_day: date) -> tuple[date, ...]:
         ).astimezone(timezone.utc)
         - timedelta(microseconds=1)
     )
-    first_label = start.astimezone(_ANWB_TARIFF_TIME_ZONE).date()
-    last_label = end.astimezone(_ANWB_TARIFF_TIME_ZONE).date()
+    first_date = start.date()
+    last_date = end.date()
     return tuple(
-        first_label + timedelta(days=offset)
-        for offset in range((last_label - first_label).days + 1)
+        first_date + timedelta(days=offset)
+        for offset in range((last_date - first_date).days + 1)
     )
 
 
@@ -777,23 +768,19 @@ class ANWBBaseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         local_day: date,
     ) -> HourlyTariffData:
         """Fetch one Home Assistant local day of hourly public tariffs."""
-        all_in_prices: dict[str, float] = {}
-        market_prices: dict[str, float] = {}
-        # ANWB interprets start/end as Amsterdam calendar-day labels, even
-        # though the query strings end in Z. A HA-local day can overlap two
-        # provider days when Home Assistant uses another timezone.
-        for provider_day in _provider_tariff_dates_for_local_day(local_day):
-            day_start, day_end = _local_day_tariff_range(provider_day)
-            url = (
-                "https://api.anwb.nl/energy/energy-services/v2/tarieven/"
-                f"{commodity}?startDate={day_start}&endDate={day_end}&interval=HOUR"
-            )
-            response = await self._async_fetch_data(url, None)
-            parsed = _hourly_tariff_data(response.get("data", []) or [])
-            all_in_prices.update(parsed.all_in_prices)
-            market_prices.update(parsed.market_prices)
-
-        return HourlyTariffData(all_in_prices, market_prices)
+        provider_days = _provider_tariff_dates_for_local_day(local_day)
+        first_day = min(provider_days)
+        # ANWB's hourly endpoint returns null for the last hour of any requested
+        # window, so request one trailing day beyond what is needed.
+        last_day = max(provider_days) + timedelta(days=1)
+        day_start = f"{first_day.isoformat()}T00:00:00.000Z"
+        day_end = f"{last_day.isoformat()}T23:59:59.999Z"
+        url = (
+            "https://api.anwb.nl/energy/energy-services/v2/tarieven/"
+            f"{commodity}?startDate={day_start}&endDate={day_end}&interval=HOUR"
+        )
+        response = await self._async_fetch_data(url, None)
+        return _hourly_tariff_data(response.get("data", []) or [])
 
     async def _async_fetch_daily_tariffs(
         self,
@@ -809,10 +796,10 @@ class ANWBBaseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             for local_day in missing_dates
             for provider_day in _provider_tariff_dates_for_local_day(local_day)
         }
-        # DAY responses use the same Amsterdam labels as HOUR responses and
-        # omit the start label, so include one leading provider day.
+        # DAY responses omit the start label, so include one leading provider day
+        # and one trailing provider day to ensure full interval coverage.
         first_day = min(provider_days) - timedelta(days=1)
-        last_day = max(provider_days)
+        last_day = max(provider_days) + timedelta(days=1)
         day_start = f"{first_day.isoformat()}T00:00:00.000Z"
         day_end = f"{last_day.isoformat()}T23:59:59.999Z"
         url = (

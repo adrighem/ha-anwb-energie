@@ -4,6 +4,7 @@
 import importlib
 import sys
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 from zoneinfo import ZoneInfo
 
@@ -399,39 +400,81 @@ def test_daily_cost_uses_amsterdam_local_dates_across_dst():
     assert coverage["complete"] is True
 
 
-def test_tariff_ranges_use_anwb_local_day_labels_across_dst():
-    """Test ANWB day labels are not converted to literal UTC boundaries."""
+def _complete_utc_hourly_tariffs(
+    start_date: datetime.date,
+    end_date: datetime.date,
+    *,
+    all_in_price: float,
+    market_price: float | None = None,
+    omit_trailing_hour: bool = True,
+) -> list[dict[str, Any]]:
+    """Return realistic UTC tariff rows between start_date and end_date."""
+    current = datetime.datetime.combine(
+        start_date,
+        datetime.time.min,
+        tzinfo=datetime.timezone.utc,
+    )
+    end = datetime.datetime.combine(
+        end_date + datetime.timedelta(days=1),
+        datetime.time.min,
+        tzinfo=datetime.timezone.utc,
+    )
+    rows = []
+    last_interval = end - datetime.timedelta(hours=1)
+    while current < end:
+        if omit_trailing_hour and current == last_interval:
+            values = {"allInPrijs": None, "marktprijs": None}
+        else:
+            values = {"allInPrijs": all_in_price}
+            if market_price is not None:
+                values["marktprijs"] = market_price
+        rows.append(
+            {
+                "date": current.strftime("%Y-%m-%dT%H:00:00.000Z"),
+                "values": values,
+            }
+        )
+        current += datetime.timedelta(hours=1)
+    return rows
+
+
+def test_provider_tariff_dates_cover_local_day_across_dst():
+    """Test UTC date ranges containing a local day across DST transitions."""
     amsterdam = ZoneInfo("Europe/Amsterdam")
 
     with patch.object(coord_mod.dt_util, "DEFAULT_TIME_ZONE", amsterdam):
-        spring = coord_mod._local_day_tariff_range(datetime.date(2026, 3, 29))
-        autumn = coord_mod._local_day_tariff_range(datetime.date(2026, 10, 25))
         spring_labels = coord_mod._provider_tariff_dates_for_local_day(
             datetime.date(2026, 3, 29)
+        )
+        autumn_labels = coord_mod._provider_tariff_dates_for_local_day(
+            datetime.date(2026, 10, 25)
+        )
+        summer_labels = coord_mod._provider_tariff_dates_for_local_day(
+            datetime.date(2026, 7, 23)
         )
     with patch.object(coord_mod.dt_util, "DEFAULT_TIME_ZONE", datetime.timezone.utc):
         utc_labels = coord_mod._provider_tariff_dates_for_local_day(
             datetime.date(2026, 7, 23)
         )
 
-    assert spring == (
-        "2026-03-29T00:00:00.000Z",
-        "2026-03-29T23:59:59.999Z",
+    assert spring_labels == (
+        datetime.date(2026, 3, 28),
+        datetime.date(2026, 3, 29),
     )
-    assert autumn == (
-        "2026-10-25T00:00:00.000Z",
-        "2026-10-25T23:59:59.999Z",
+    assert autumn_labels == (
+        datetime.date(2026, 10, 24),
+        datetime.date(2026, 10, 25),
     )
-    assert spring_labels == (datetime.date(2026, 3, 29),)
-    assert utc_labels == (
+    assert summer_labels == (
+        datetime.date(2026, 7, 22),
         datetime.date(2026, 7, 23),
-        datetime.date(2026, 7, 24),
     )
+    assert utc_labels == (datetime.date(2026, 7, 23),)
 
 
 @pytest.mark.asyncio
 async def test_non_amsterdam_local_day_combines_adjacent_provider_days(auth_mock):
-    """Test another HA timezone is filtered from both overlapping ANWB days."""
+    """Test another HA timezone is filtered from the padded query range."""
     local_day = datetime.date(2026, 7, 23)
     cache = coord_mod.TariffCache(
         None,
@@ -455,14 +498,10 @@ async def test_non_amsterdam_local_day_combines_adjacent_provider_days(auth_mock
 
     async def mock_fetch_side_effect(url, token):
         urls.append(url)
-        provider_day = (
-            datetime.date(2026, 7, 24)
-            if "startDate=2026-07-24" in url
-            else datetime.date(2026, 7, 23)
-        )
         return {
-            "data": _complete_amsterdam_hourly_tariffs(
-                provider_day,
+            "data": _complete_utc_hourly_tariffs(
+                datetime.date(2026, 7, 23),
+                datetime.date(2026, 7, 24),
                 all_in_price=20.0,
             )
         }
@@ -488,8 +527,74 @@ async def test_non_amsterdam_local_day_combines_adjacent_provider_days(auth_mock
     assert len(result.all_in_prices) == 24
     assert min(result.all_in_prices) == "2026-07-23T00:00:00.000Z"
     assert max(result.all_in_prices) == "2026-07-23T23:00:00.000Z"
-    assert len(urls) == 2
+    assert len(urls) == 1
+    assert "startDate=2026-07-23T00:00:00.000Z" in urls[0]
+    assert "endDate=2026-07-24T23:59:59.999Z" in urls[0]
     assert all(call.args[1] is None for call in mock_fetch.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_hourly_tariffs_fetch_with_trailing_null_and_boundary_hours(auth_mock):
+    """Test hourly tariff fetch handles ANWB endpoint boundary nulls (Issue #19)."""
+    amsterdam = ZoneInfo("Europe/Amsterdam")
+    local_day = datetime.date(2026, 9, 1)  # CEST: UTC+2
+    cache = coord_mod.TariffCache(
+        None,
+        "Europe/Amsterdam",
+        clock=lambda: datetime.datetime(2026, 9, 1, 12, tzinfo=amsterdam),
+    )
+    coordinator = ANWBConsumptionCoordinator(
+        MagicMock(),
+        auth_mock,
+        MagicMock(),
+        tariff_cache=cache,
+    )
+    coordinator._kraken_token = "mock_kraken_token"
+    urls = []
+
+    async def mock_fetch_side_effect(url, token):
+        urls.append(url)
+        # Padded query from 2026-08-31 to 2026-09-02; 2026-09-02T23:00:00Z will be null
+        return {
+            "data": _complete_utc_hourly_tariffs(
+                datetime.date(2026, 8, 31),
+                datetime.date(2026, 9, 2),
+                all_in_price=0.25,
+                market_price=0.15,
+                omit_trailing_hour=True,
+            )
+        }
+
+    with (
+        patch.object(coord_mod.dt_util, "DEFAULT_TIME_ZONE", amsterdam),
+        patch.object(
+            coordinator,
+            "_async_fetch_data",
+            new_callable=AsyncMock,
+        ) as mock_fetch,
+    ):
+        mock_fetch.side_effect = mock_fetch_side_effect
+        result = await cache.async_get_hourly_day(
+            "electricity",
+            local_day,
+            lambda: coordinator._async_fetch_hourly_tariffs(
+                "electricity",
+                local_day,
+            ),
+        )
+
+    # Local day 2026-09-01 in CEST (UTC+2) spans 2026-08-31T22:00Z to 2026-09-01T21:00Z
+    assert len(result.all_in_prices) == 24
+    assert len(result.market_prices) == 24
+    assert min(result.all_in_prices) == "2026-08-31T22:00:00.000Z"
+    assert max(result.all_in_prices) == "2026-09-01T21:00:00.000Z"
+    assert "2026-08-31T22:00:00.000Z" in result.all_in_prices
+    assert "2026-08-31T23:00:00.000Z" in result.all_in_prices
+    assert all(price == 0.25 for price in result.all_in_prices.values())
+    assert all(price == 0.15 for price in result.market_prices.values())
+    assert len(urls) == 1
+    assert "startDate=2026-08-31T00:00:00.000Z" in urls[0]
+    assert "endDate=2026-09-02T23:59:59.999Z" in urls[0]
 
 
 @pytest.mark.asyncio
@@ -954,7 +1059,7 @@ async def test_pricing_reuses_current_day_tariffs_fetched_for_monthly_cost(auth_
         if "tarieven/" in url and "interval=HOUR" in url:
             local_day = (
                 datetime.date(2026, 4, 21)
-                if "startDate=2026-04-21" in url
+                if "endDate=2026-04-22" in url
                 else datetime.date(2026, 4, 20)
             )
             return {
@@ -1017,8 +1122,10 @@ async def test_pricing_reuses_current_day_tariffs_fetched_for_monthly_cost(auth_
         url for url in urls if "tarieven/electricity" in url
     ]
     assert len(electricity_tariff_urls) == 2
+    assert sum("startDate=2026-04-19" in url for url in electricity_tariff_urls) == 1
     assert sum("startDate=2026-04-20" in url for url in electricity_tariff_urls) == 1
-    assert sum("startDate=2026-04-21" in url for url in electricity_tariff_urls) == 1
+    assert sum("endDate=2026-04-21" in url for url in electricity_tariff_urls) == 1
+    assert sum("endDate=2026-04-22" in url for url in electricity_tariff_urls) == 1
 
 
 @pytest.mark.asyncio
@@ -1072,8 +1179,9 @@ async def test_cold_pricing_skips_tomorrow_before_publication_cutoffs(auth_mock)
 
     tariff_urls = [url for url in urls if "tarieven/" in url]
     assert len(tariff_urls) == 2
-    assert all("startDate=2026-04-20" in url for url in tariff_urls)
-    assert not any("startDate=2026-04-21" in url for url in tariff_urls)
+    assert all("startDate=2026-04-19" in url for url in tariff_urls)
+    assert all("endDate=2026-04-21" in url for url in tariff_urls)
+    assert not any("endDate=2026-04-22" in url for url in tariff_urls)
     assert len(result["prices_today"]) == 24
     assert len(result["gas_prices_today"]) == 24
 
@@ -1107,7 +1215,7 @@ async def test_pricing_retries_partial_tomorrow_data_and_skips_gas_when_unused(
     async def mock_fetch_side_effect(url, token):
         nonlocal tomorrow_calls
         urls.append(url)
-        if "startDate=2026-04-21" in url:
+        if "endDate=2026-04-22" in url:
             tomorrow_calls += 1
             rows = _complete_amsterdam_hourly_tariffs(
                 datetime.date(2026, 4, 21),
@@ -1325,7 +1433,7 @@ async def test_year_to_date_costs_combine_closed_days_with_current_hours(auth_mo
     assert len(hourly_tariff_urls) == 2
     assert len(daily_tariff_urls) == 2
     assert len(hourly_tariff_urls) + len(daily_tariff_urls) == 4
-    assert all("startDate=2025-12-31T00:00:00.000Z" in url for url in daily_tariff_urls)
+    assert all("startDate=2025-12-30T00:00:00.000Z" in url for url in daily_tariff_urls)
 
 
 @pytest.mark.asyncio
@@ -1847,9 +1955,9 @@ async def test_tariffs_are_requested_only_for_days_with_nonzero_usage(auth_mock)
         if "electricity/cache" in url and "interval=HOUR" in url:
             return {"data": [{"startDate": "2026-04-02T10:00:00.000Z", "usage": 1.0}]}
         if "tarieven/electricity" in url:
-            if "startDate=2026-04-01" in url:
+            if "startDate=2026-03-31" in url:
                 raise UpdateFailed("temporary tariff failure")
-            if "startDate=2026-04-02" in url:
+            if "startDate=2026-04-01" in url:
                 return {
                     "data": [
                         {
@@ -1876,7 +1984,8 @@ async def test_tariffs_are_requested_only_for_days_with_nonzero_usage(auth_mock)
     assert result["electricity_import_tariff_coverage"]["matched_intervals"] == 1
     tariff_urls = [url for url in urls if "tarieven/" in url]
     assert len(tariff_urls) == 1
-    assert "startDate=2026-04-02" in tariff_urls[0]
+    assert "startDate=2026-04-01" in tariff_urls[0]
+    assert "endDate=2026-04-03" in tariff_urls[0]
 
 
 @pytest.mark.asyncio
