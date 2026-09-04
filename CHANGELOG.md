@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.4](https://github.com/adrighem/ha-anwb-energie/compare/v1.3.3...v1.3.4) (2026-09-04)
+
+
+### Bug Fixes
+
+* extend hourly tariff fetch range to prevent null boundary gaps (refs [#19](https://github.com/adrighem/ha-anwb-energie/issues/19)) ([76613f8](https://github.com/adrighem/ha-anwb-energie/commit/76613f87c61ea3fe3577c5c813cb29d78535701d))
+
 ## [1.3.3](https://github.com/adrighem/ha-anwb-energie/compare/v1.3.2...v1.3.3) (2026-07-30)
 
 
