@@ -47,7 +47,7 @@ from .tariff_cache import (
     DailyTariffData,
     HourlyTariffData,
     TariffCache,
-    _parse_local_date,
+    parse_local_date,
 )
 
 NET_METERING_END_DATE = datetime.fromisoformat(NET_METERING_END_DATE_STR)
@@ -275,23 +275,29 @@ def _daily_tariff_map(data_list: list[dict[str, Any]]) -> dict[str, float]:
     return dict(_daily_tariff_data(data_list).all_in_prices)
 
 
+def _is_post_cutoff_hourly(timestamp: str) -> bool:
+    dt = _parse_api_datetime(timestamp)
+    return dt is not None and dt >= NET_METERING_END_DATE
+
+
+def _is_post_cutoff_daily(day_str: str) -> bool:
+    parsed_day = parse_local_date(day_str)
+    return parsed_day is not None and parsed_day >= NET_METERING_END_DATE.date()
+
+
 def _build_export_price_map(
     all_in_prices: Mapping[str, float],
     market_prices: Mapping[str, float],
+    is_after_cutoff: Callable[[str], bool] = _is_post_cutoff_hourly,
 ) -> dict[str, float]:
     """Return export price map applying net metering cutoff date."""
     export_prices: dict[str, float] = {}
     all_keys = set(all_in_prices) | set(market_prices)
-    for timestamp in all_keys:
-        dt = _parse_api_datetime(timestamp)
-        if dt is not None and dt >= NET_METERING_END_DATE:
-            market = market_prices.get(timestamp)
-            if market is not None:
-                export_prices[timestamp] = market
-        else:
-            all_in = all_in_prices.get(timestamp)
-            if all_in is not None:
-                export_prices[timestamp] = all_in
+    for key in all_keys:
+        source = market_prices if is_after_cutoff(key) else all_in_prices
+        price = source.get(key)
+        if price is not None:
+            export_prices[key] = price
     return export_prices
 
 
@@ -300,20 +306,7 @@ def _build_daily_export_price_map(
     market_prices: Mapping[str, float],
 ) -> dict[str, float]:
     """Return daily export price map applying net metering cutoff date."""
-    export_prices: dict[str, float] = {}
-    net_metering_end_day = NET_METERING_END_DATE.date()
-    all_keys = set(all_in_prices) | set(market_prices)
-    for day_str in all_keys:
-        parsed_day = _parse_local_date(day_str)
-        if parsed_day is not None and parsed_day >= net_metering_end_day:
-            market = market_prices.get(day_str)
-            if market is not None:
-                export_prices[day_str] = market
-        else:
-            all_in = all_in_prices.get(day_str)
-            if all_in is not None:
-                export_prices[day_str] = all_in
-    return export_prices
+    return _build_export_price_map(all_in_prices, market_prices, _is_post_cutoff_daily)
 
 
 def _hourly_tariff_data(
@@ -1987,12 +1980,9 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
         price_map: dict,
         gas_data: list,
         gas_price_map: dict,
-        export_price_map: dict | None = None,
+        export_price_map: dict[str, float],
     ) -> None:
         """Insert ANWB statistics."""
-        if export_price_map is None:
-            export_price_map = price_map
-
         for sensor_type, is_cost, data_list, p_map in [
             ("import_usage", False, import_data, price_map),
             ("export_usage", False, export_data, price_map),
@@ -2050,6 +2040,15 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
                     )
                     if price_cents is None:
                         if usage != 0:
+                            if (
+                                sensor_type == "export_cost"
+                                and start_time >= NET_METERING_END_DATE
+                            ):
+                                _LOGGER.warning(
+                                    "Missing electricity market tariff for export statistics "
+                                    "insertion at %s",
+                                    start_time.isoformat(),
+                                )
                             break
                         value = 0.0
                     else:

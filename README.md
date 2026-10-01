@@ -192,14 +192,15 @@ automations, and summary dashboards.
 
 ### Export compensation
 
-The integration's export statistic and export-value entities apply the all-in
-tariff to every exported kWh. They are estimates, not final-settlement values.
+The integration's export statistic and export-value entities apply all-in
+tariffs to exported kWh through 31 December 2026. Starting 1 January 2027,
+when the Dutch net-metering scheme ([salderingsregeling][net-metering]) ends,
+export calculations switch to the bare market price (`marktprijs`).
+Sensors expose the active pricing basis in the `export_price_basis` attribute
+(`all_in` or `market`).
 
-The Dutch annual net-metering scheme applies through 31 December 2026 and
-[ends on 1 January 2027][net-metering]. The integration does not split annual
-export into netted and surplus portions, and it does not model contract-specific
-settlement rules from 2027 onward. Leave return compensation unset if exact
-invoice reconciliation matters.
+Historical recorder statistics created before upgrading retain the calculation
+applied at insertion time and are not retroactively rewritten.
 
 ## Cost estimates
 

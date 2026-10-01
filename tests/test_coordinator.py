@@ -91,6 +91,7 @@ coord_mod = importlib.reload(coord_mod)
 coord_mod.dt_util.DEFAULT_TIME_ZONE = ZoneInfo("Europe/Amsterdam")
 ANWBConsumptionCoordinator = coord_mod.ANWBConsumptionCoordinator
 ANWBPricingCoordinator = coord_mod.ANWBPricingCoordinator
+DailyTariffData = coord_mod.DailyTariffData
 
 
 @pytest.fixture
@@ -1521,9 +1522,9 @@ async def test_failed_daily_fill_keeps_complete_cached_import_cost(auth_mock):
     )
 
     async def seed_tariff(_missing):
-        return {"2026-01-01": 10.0}
+        return DailyTariffData({"2026-01-01": 10.0})
 
-    await tariff_cache.async_get_daily_prices(
+    await tariff_cache.async_get_daily_tariffs(
         "electricity",
         {datetime.date(2026, 1, 1)},
         seed_tariff,
@@ -2556,6 +2557,7 @@ async def test_insert_statistics_backfills_gaps_and_updates_later_sums(auth_mock
             {},
             [],
             {},
+            export_price_map={},
         )
 
     assert [row.start.hour for row in recorded[statistic_id]] == [11, 12, 13]
@@ -2615,6 +2617,7 @@ async def test_cost_statistics_stop_at_tariff_gap_and_backfill(auth_mock):
             incomplete_prices,
             [],
             {},
+            export_price_map={},
         )
 
         usage_id = "anwb_energie_account:import_usage_12345"
@@ -2643,6 +2646,7 @@ async def test_cost_statistics_stop_at_tariff_gap_and_backfill(auth_mock):
             complete_prices,
             [],
             {},
+            export_price_map={},
         )
 
     assert [row.start.hour for row in recorded[cost_id]] == [10, 11, 12]
@@ -2735,6 +2739,7 @@ async def test_cost_statistics_repair_legacy_zero_tariff_rows(auth_mock):
             prices,
             [],
             {},
+            export_price_map={},
         )
 
     assert [row.start.hour for row in recorded[cost_id]] == [11, 12]
@@ -2833,3 +2838,95 @@ def test_build_daily_export_price_map_transitions_at_net_metering_cutoff():
     assert result["2026-12-31"] == 25.0
     assert result["2027-01-01"] == 12.0
     assert result["2027-01-02"] == 15.0
+
+
+def test_build_export_price_map_handles_negative_market_price():
+    """Export price map correctly preserves negative market prices after cutoff."""
+    all_in = {"2027-06-01T12:00:00.000Z": 10.0}
+    market = {"2027-06-01T12:00:00.000Z": -5.0}
+
+    result = coord_mod._build_export_price_map(all_in, market)
+    assert result["2027-06-01T12:00:00.000Z"] == -5.0
+
+
+@pytest.mark.asyncio
+async def test_insert_statistics_missing_export_market_price_logs_warning(auth_mock, caplog):
+    """Post-cutoff missing export market tariff logs a warning."""
+    import logging
+
+    hass = MagicMock()
+    coordinator = ANWBConsumptionCoordinator(hass, auth_mock, MagicMock())
+    coordinator.hass = hass
+    coordinator._account_number = "12345"
+
+    export_data = [{"startDate": "2027-01-01T10:00:00.000Z", "usage": 2.0}]
+    recorder = MagicMock()
+    recorder.async_add_executor_job = AsyncMock(return_value={})
+
+    with (
+        patch.object(coord_mod, "get_instance", return_value=recorder),
+        patch.object(coord_mod, "StatisticData", MagicMock()),
+        patch.object(coord_mod, "StatisticMetaData", MagicMock()),
+        patch.object(coord_mod, "StatisticMeanType", SimpleNamespace(NONE="none")),
+        patch.object(coord_mod, "async_add_external_statistics", MagicMock()),
+        caplog.at_level(logging.WARNING),
+    ):
+        await coordinator._insert_statistics(
+            [],
+            export_data,
+            {},
+            [],
+            {},
+            export_price_map={},
+        )
+
+    assert "Missing electricity market tariff for export statistics insertion" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_insert_statistics_negative_export_market_price(auth_mock):
+    """Negative export market price results in negative export cost statistics."""
+    hass = MagicMock()
+    coordinator = ANWBConsumptionCoordinator(hass, auth_mock, MagicMock())
+    coordinator.hass = hass
+    coordinator._account_number = "12345"
+
+    export_data = [{"startDate": "2027-01-01T12:00:00.000Z", "usage": 2.0}]
+    export_price_map = {"2027-01-01T12:00:00.000Z": -10.0}
+
+    class StatisticData:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class StatisticMetaData:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    recorded = {}
+
+    def add_statistics(hass, metadata, statistics):
+        recorded.setdefault(metadata.statistic_id, []).extend(statistics)
+
+    recorder = MagicMock()
+    recorder.async_add_executor_job = AsyncMock(return_value={})
+
+    with (
+        patch.object(coord_mod, "get_instance", return_value=recorder),
+        patch.object(coord_mod, "StatisticData", StatisticData),
+        patch.object(coord_mod, "StatisticMetaData", StatisticMetaData),
+        patch.object(coord_mod, "StatisticMeanType", SimpleNamespace(NONE="none")),
+        patch.object(
+            coord_mod, "async_add_external_statistics", side_effect=add_statistics
+        ),
+    ):
+        await coordinator._insert_statistics(
+            [],
+            export_data,
+            {},
+            [],
+            {},
+            export_price_map=export_price_map,
+        )
+
+    cost_id = "anwb_energie_account:export_cost_12345"
+    assert recorded[cost_id][0].state == pytest.approx(-0.2)

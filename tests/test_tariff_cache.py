@@ -405,20 +405,20 @@ async def test_daily_partial_results_persist_points_and_retry_only_missing_dates
     async def fetch(missing: frozenset[date]):
         requested.append(missing)
         if len(requested) == 1:
-            return first_response
+            return DailyTariffData(first_response)
         assert missing == frozenset({date(2026, 1, 2)})
-        return {"2026-01-02": 2.5}
+        return DailyTariffData({"2026-01-02": 2.5})
 
-    first = await cache.async_get_daily_prices("electricity", required, fetch)
-    assert dict(first) == {
+    first = await cache.async_get_daily_tariffs("electricity", required, fetch)
+    assert dict(first.all_in_prices) == {
         "2026-01-01": 0.0,
         "2026-01-03": -3.5,
     }
     assert requested == [frozenset(required)]
 
     first_response["2026-01-01"] = 1234.0
-    second = await cache.async_get_daily_prices("electricity", required, fetch)
-    assert dict(second) == {
+    second = await cache.async_get_daily_tariffs("electricity", required, fetch)
+    assert dict(second.all_in_prices) == {
         "2026-01-01": 0.0,
         "2026-01-02": 2.5,
         "2026-01-03": -3.5,
@@ -438,12 +438,12 @@ async def test_daily_partial_results_persist_points_and_retry_only_missing_dates
         raise AssertionError("complete warm DAY cache unexpectedly fetched")
 
     restarted = TariffCache(store, "Europe/Amsterdam", clock=clock)
-    warm = await restarted.async_get_daily_prices(
+    warm = await restarted.async_get_daily_tariffs(
         "electricity",
         required | {date(2026, 1, 4)},
         must_not_fetch,
     )
-    assert dict(warm) == persisted
+    assert dict(warm.all_in_prices) == persisted
 
 
 @pytest.mark.asyncio
@@ -454,31 +454,35 @@ async def test_cached_daily_snapshot_survives_a_failed_missing_date_fill():
     required = {date(2026, 1, 1), date(2026, 1, 2)}
 
     async def partial_fetch(_missing: frozenset[date]):
-        return {"2026-01-01": 10.0}
+        return DailyTariffData({"2026-01-01": 10.0})
 
     assert dict(
-        await cache.async_get_daily_prices(
-            "electricity",
-            required,
-            partial_fetch,
-        )
+        (
+            await cache.async_get_daily_tariffs(
+                "electricity",
+                required,
+                partial_fetch,
+            )
+        ).all_in_prices
     ) == {"2026-01-01": 10.0}
 
     async def failed_fetch(_missing: frozenset[date]):
         raise RuntimeError("temporary failure")
 
     with pytest.raises(RuntimeError, match="temporary failure"):
-        await cache.async_get_daily_prices(
+        await cache.async_get_daily_tariffs(
             "electricity",
             required,
             failed_fetch,
         )
 
     assert dict(
-        await cache.async_get_cached_daily_prices(
-            "electricity",
-            required,
-        )
+        (
+            await cache.async_get_cached_daily_tariffs(
+                "electricity",
+                required,
+            )
+        ).all_in_prices
     ) == {"2026-01-01": 10.0}
 
 
@@ -498,16 +502,16 @@ async def test_identical_daily_requests_are_single_flight():
         assert missing == frozenset(required)
         started.set()
         await release.wait()
-        return {value.isoformat(): 10.0 for value in missing}
+        return DailyTariffData({value.isoformat(): 10.0 for value in missing})
 
-    first = asyncio.create_task(cache.async_get_daily_prices("gas", required, fetch))
-    second = asyncio.create_task(cache.async_get_daily_prices("gas", required, fetch))
+    first = asyncio.create_task(cache.async_get_daily_tariffs("gas", required, fetch))
+    second = asyncio.create_task(cache.async_get_daily_tariffs("gas", required, fetch))
     await asyncio.wait_for(started.wait(), timeout=1)
     release.set()
     results = await asyncio.wait_for(asyncio.gather(first, second), timeout=1)
 
     assert calls == 1
-    assert dict(results[0]) == dict(results[1])
+    assert dict(results[0].all_in_prices) == dict(results[1].all_in_prices)
 
 
 @pytest.mark.asyncio
@@ -774,3 +778,31 @@ async def test_daily_tariffs_survives_missing_day_market_key():
     )
     assert dict(result.all_in_prices) == {"2026-06-01": 25.0}
     assert dict(result.market_prices) == {}
+
+
+@pytest.mark.asyncio
+async def test_post_2027_daily_cache_refetches_when_market_price_missing():
+    """Post-2027 electricity DAY missing market tariff triggers refetch."""
+    clock = MutableClock(datetime(2027, 2, 1, 12, tzinfo=timezone.utc))
+    payload = _empty_payload()
+    payload["commodities"]["electricity"]["DAY"] = {"2027-01-15": 25.0}
+    store = FakeStore(payload)
+    cache = TariffCache(store, "Europe/Amsterdam", clock=clock)
+
+    fetched = []
+
+    async def fetch(missing: frozenset[date]):
+        fetched.append(missing)
+        return DailyTariffData(
+            {"2027-01-15": 25.0},
+            {"2027-01-15": 12.0},
+        )
+
+    result = await cache.async_get_daily_tariffs(
+        "electricity",
+        {date(2027, 1, 15)},
+        fetch,
+    )
+    assert fetched == [frozenset({date(2027, 1, 15)})]
+    assert dict(result.all_in_prices) == {"2027-01-15": 25.0}
+    assert dict(result.market_prices) == {"2027-01-15": 12.0}
