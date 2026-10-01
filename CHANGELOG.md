@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.5](https://github.com/adrighem/ha-anwb-energie/compare/v1.3.4...v1.3.5) (2026-10-01)
+
+
+### Bug Fixes
+
+* address review points for post-2027 export pricing (fixes [#21](https://github.com/adrighem/ha-anwb-energie/issues/21)) ([c807d64](https://github.com/adrighem/ha-anwb-energie/commit/c807d64cc2128a235270324ce511e021b088b6b4))
+* switch electricity export pricing to market price after net metering ends (fixes [#21](https://github.com/adrighem/ha-anwb-energie/issues/21)) ([629234e](https://github.com/adrighem/ha-anwb-energie/commit/629234ea87b8829862079b11abf74bdbea912566))
+
 ## [1.3.4](https://github.com/adrighem/ha-anwb-energie/compare/v1.3.3...v1.3.4) (2026-09-04)
 
 
