@@ -1090,3 +1090,22 @@ def test_cost_sensors_expose_estimate_metadata(keys, expected):
         description = next(desc for desc in SENSOR_TYPES if desc.key == key)
         sensor = ANWBEnergieAccountSensor(coordinator, description)
         assert sensor.extra_state_attributes == expected
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "electricity_export_month_to_date_credit",
+        "electricity_export_year_to_date_credit",
+    ],
+)
+def test_cost_sensors_expose_export_price_basis(key):
+    """Test export cost sensors expose export_price_basis attribute."""
+    coordinator = MagicMock()
+    coordinator.data = {
+        "account_number": "12345",
+        "export_price_basis": "market",
+    }
+    description = next(desc for desc in SENSOR_TYPES if desc.key == key)
+    sensor = ANWBEnergieAccountSensor(coordinator, description)
+    assert sensor.extra_state_attributes.get("export_price_basis") == "market"

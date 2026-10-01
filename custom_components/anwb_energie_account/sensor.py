@@ -742,6 +742,12 @@ class ANWBEnergieAccountSensor(CoordinatorEntity[ANWBBaseCoordinator], SensorEnt
                     attributes["tariff_coverage"] = self.coordinator.data.get(
                         "electricity_export_tariff_coverage"
                     )
+                    if (
+                        export_price_basis := self.coordinator.data.get(
+                            "export_price_basis"
+                        )
+                    ) is not None:
+                        attributes["export_price_basis"] = export_price_basis
                 elif key in ELECTRICITY_IMPORT_YEAR_COST_KEYS:
                     attributes["tariff_coverage"] = self.coordinator.data.get(
                         "electricity_import_year_to_date_tariff_coverage"
@@ -756,6 +762,12 @@ class ANWBEnergieAccountSensor(CoordinatorEntity[ANWBBaseCoordinator], SensorEnt
                     attributes["calculation_method"] = self.coordinator.data.get(
                         "year_to_date_cost_calculation_method"
                     )
+                    if (
+                        export_price_basis := self.coordinator.data.get(
+                            "export_price_basis"
+                        )
+                    ) is not None:
+                        attributes["export_price_basis"] = export_price_basis
                 elif key in ELECTRICITY_FIXED_COST_KEYS:
                     attributes["fixed_cost_source"] = self.coordinator.data.get(
                         "electricity_fixed_cost_source"

@@ -30,11 +30,12 @@ class _HourlyBucketJSON(TypedDict):
     market: dict[str, float]
 
 
-class _CommodityCacheJSON(TypedDict):
+class _CommodityCacheJSON(TypedDict, total=False):
     """JSON tariff data for one commodity."""
 
     HOUR: dict[str, _HourlyBucketJSON]
     DAY: dict[str, float]
+    DAY_MARKET: dict[str, float]
 
 
 class _CacheJSON(TypedDict):
@@ -80,10 +81,31 @@ class HourlyTariffData:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class DailyTariffData:
+    """Normalized daily tariff maps keyed by local date."""
+
+    all_in_prices: Mapping[str, float]
+    market_prices: Mapping[str, float] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Detach the maps supplied by callers and expose them read-only."""
+        object.__setattr__(
+            self,
+            "all_in_prices",
+            MappingProxyType(dict(self.all_in_prices)),
+        )
+        object.__setattr__(
+            self,
+            "market_prices",
+            MappingProxyType(dict(self.market_prices)),
+        )
+
+
 HourlyFetchCallback = Callable[[], Awaitable[HourlyTariffData]]
 DailyFetchCallback = Callable[
     [frozenset[date]],
-    Awaitable[Mapping[str, float]],
+    Awaitable[DailyTariffData | Mapping[str, float]],
 ]
 
 
@@ -101,6 +123,7 @@ class _MemoryDailyPrice:
 
     price: float
     expires_at: datetime
+    market_price: float | None = None
 
 
 _T = TypeVar("_T")
@@ -176,6 +199,9 @@ class TariffCache:
             commodity: {} for commodity in _COMMODITIES
         }
         self._daily: dict[Commodity, dict[str, float]] = {
+            commodity: {} for commodity in _COMMODITIES
+        }
+        self._daily_market: dict[Commodity, dict[str, float]] = {
             commodity: {} for commodity in _COMMODITIES
         }
         self._memory_hourly: dict[
@@ -296,18 +322,18 @@ class TariffCache:
         )
         return self._copy_hourly(result)
 
-    async def async_get_daily_prices(
+    async def async_get_daily_tariffs(
         self,
         commodity: Commodity,
         required_dates: Collection[date],
         fetch: DailyFetchCallback,
-    ) -> Mapping[str, float]:
-        """Return available daily prices and fetch each missing date."""
+    ) -> DailyTariffData:
+        """Return available daily tariffs and fetch each missing date."""
         await self.async_initialize()
         commodity = self._validated_commodity(commodity)
         required = frozenset(self._validated_date(value) for value in required_dates)
         if not required:
-            return MappingProxyType({})
+            return DailyTariffData({}, {})
 
         now = self._now()
         missing = self._missing_daily_dates(commodity, required, now)
@@ -316,29 +342,46 @@ class TariffCache:
             async def _fetch_and_cache() -> None:
                 async with self._semaphore:
                     fetched = await fetch(missing)
-                if not isinstance(fetched, Mapping):
-                    raise TypeError("daily fetch callback must return a mapping")
+                if isinstance(fetched, DailyTariffData):
+                    raw_all_in = fetched.all_in_prices
+                    raw_market = fetched.market_prices
+                elif isinstance(fetched, Mapping):
+                    raw_all_in = fetched
+                    raw_market = {}
+                else:
+                    raise TypeError(
+                        "daily fetch callback must return DailyTariffData or mapping"
+                    )
 
                 current_now = self._now()
                 today = self._local_today(current_now)
                 changed_persistent = False
-                for raw_date, raw_price in fetched.items():
+                for raw_date, raw_price in raw_all_in.items():
                     local_date = _parse_local_date(raw_date)
                     price = _finite_number(raw_price)
                     if local_date is None or price is None:
                         continue
 
+                    market_price = _finite_number(raw_market.get(raw_date))
                     day_key = local_date.isoformat()
                     memory_key = (commodity, day_key)
                     if local_date < today:
                         if self._daily[commodity].get(day_key) != price:
                             self._daily[commodity][day_key] = price
                             changed_persistent = True
+                        if (
+                            market_price is not None
+                            and self._daily_market[commodity].get(day_key)
+                            != market_price
+                        ):
+                            self._daily_market[commodity][day_key] = market_price
+                            changed_persistent = True
                         self._memory_daily.pop(memory_key, None)
                     else:
                         self._memory_daily[memory_key] = _MemoryDailyPrice(
                             price,
                             current_now + self._memory_ttl,
+                            market_price=market_price,
                         )
 
                 if changed_persistent:
@@ -353,7 +396,28 @@ class TariffCache:
                 _fetch_and_cache,
             )
 
-        return self._daily_result(commodity, required, self._now())
+        return self._daily_tariff_result(commodity, required, self._now())
+
+    async def async_get_daily_prices(
+        self,
+        commodity: Commodity,
+        required_dates: Collection[date],
+        fetch: DailyFetchCallback,
+    ) -> Mapping[str, float]:
+        """Return available daily prices and fetch each missing date."""
+        tariffs = await self.async_get_daily_tariffs(commodity, required_dates, fetch)
+        return tariffs.all_in_prices
+
+    async def async_get_cached_daily_tariffs(
+        self,
+        commodity: Commodity,
+        required_dates: Collection[date],
+    ) -> DailyTariffData:
+        """Return cached DAY tariffs without starting a fetch."""
+        await self.async_initialize()
+        commodity = self._validated_commodity(commodity)
+        required = frozenset(self._validated_date(value) for value in required_dates)
+        return self._daily_tariff_result(commodity, required, self._now())
 
     async def async_get_cached_daily_prices(
         self,
@@ -361,10 +425,8 @@ class TariffCache:
         required_dates: Collection[date],
     ) -> Mapping[str, float]:
         """Return cached DAY prices without starting a fetch."""
-        await self.async_initialize()
-        commodity = self._validated_commodity(commodity)
-        required = frozenset(self._validated_date(value) for value in required_dates)
-        return self._daily_result(commodity, required, self._now())
+        tariffs = await self.async_get_cached_daily_tariffs(commodity, required_dates)
+        return tariffs.all_in_prices
 
     async def async_prune(self) -> None:
         """Retain HOUR current/previous months and DAY current/previous years."""
@@ -405,6 +467,13 @@ class TariffCache:
                 local_day = _parse_local_date(day_key)
                 if local_day is None or local_day.year not in keep_years:
                     del daily[day_key]
+                    changed = True
+
+            daily_market = self._daily_market[commodity]
+            for day_key in tuple(daily_market):
+                local_day = _parse_local_date(day_key)
+                if local_day is None or local_day.year not in keep_years:
+                    del daily_market[day_key]
                     changed = True
 
         self._memory_hourly = {
@@ -511,6 +580,16 @@ class TariffCache:
                         continue
                     self._daily[commodity][local_day.isoformat()] = price
 
+            raw_daily_market = raw_commodity.get("DAY_MARKET")
+            if isinstance(raw_daily_market, Mapping):
+                for raw_day, raw_price in raw_daily_market.items():
+                    local_day = _parse_local_date(raw_day)
+                    price = _finite_number(raw_price)
+                    if local_day is None or local_day >= today or price is None:
+                        needs_rewrite = True
+                        continue
+                    self._daily_market[commodity][local_day.isoformat()] = price
+
         if set(commodities) != set(_COMMODITIES):
             needs_rewrite = True
         return needs_rewrite
@@ -532,7 +611,7 @@ class TariffCache:
         """Create a detached, deterministic JSON-compatible cache payload."""
         commodities: dict[str, _CommodityCacheJSON] = {}
         for commodity in _COMMODITIES:
-            commodities[commodity] = {
+            commodity_payload: _CommodityCacheJSON = {
                 "HOUR": {
                     day_key: {
                         "all_in": dict(sorted(bucket.all_in_prices.items())),
@@ -542,6 +621,11 @@ class TariffCache:
                 },
                 "DAY": dict(sorted(self._daily[commodity].items())),
             }
+            if self._daily_market[commodity]:
+                commodity_payload["DAY_MARKET"] = dict(
+                    sorted(self._daily_market[commodity].items())
+                )
+            commodities[commodity] = commodity_payload
 
         return {
             "schema_version": CACHE_SCHEMA_VERSION,
@@ -645,6 +729,33 @@ class TariffCache:
             missing.add(local_day)
         return frozenset(missing)
 
+    def _daily_tariff_result(
+        self,
+        commodity: Commodity,
+        required: frozenset[date],
+        now: datetime,
+    ) -> DailyTariffData:
+        """Return detached immutable maps for available required dates."""
+        all_in_result: dict[str, float] = {}
+        market_result: dict[str, float] = {}
+        for local_day in sorted(required):
+            day_key = local_day.isoformat()
+            if day_key in self._daily[commodity]:
+                all_in_result[day_key] = self._daily[commodity][day_key]
+                if day_key in self._daily_market[commodity]:
+                    market_result[day_key] = self._daily_market[commodity][day_key]
+                continue
+
+            memory_key = (commodity, day_key)
+            memory = self._memory_daily.get(memory_key)
+            if memory is not None and memory.expires_at > now:
+                all_in_result[day_key] = memory.price
+                if memory.market_price is not None:
+                    market_result[day_key] = memory.market_price
+            else:
+                self._memory_daily.pop(memory_key, None)
+        return DailyTariffData(all_in_result, market_result)
+
     def _daily_result(
         self,
         commodity: Commodity,
@@ -652,20 +763,7 @@ class TariffCache:
         now: datetime,
     ) -> Mapping[str, float]:
         """Return a detached, immutable map for available required dates."""
-        result: dict[str, float] = {}
-        for local_day in sorted(required):
-            day_key = local_day.isoformat()
-            if day_key in self._daily[commodity]:
-                result[day_key] = self._daily[commodity][day_key]
-                continue
-
-            memory_key = (commodity, day_key)
-            memory = self._memory_daily.get(memory_key)
-            if memory is not None and memory.expires_at > now:
-                result[day_key] = memory.price
-            else:
-                self._memory_daily.pop(memory_key, None)
-        return MappingProxyType(result)
+        return self._daily_tariff_result(commodity, required, now).all_in_prices
 
     @staticmethod
     def _copy_hourly(data: HourlyTariffData) -> HourlyTariffData:

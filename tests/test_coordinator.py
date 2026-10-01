@@ -636,7 +636,7 @@ async def test_non_amsterdam_daily_tariff_range_includes_trailing_provider_day(
             frozenset({datetime.date(2026, 7, 20)}),
         )
 
-    assert result == {"2026-07-20": 20.0}
+    assert result.all_in_prices == {"2026-07-20": 20.0}
     assert "startDate=2026-07-19T00:00:00.000Z" in urls[0]
     assert "endDate=2026-07-21T23:59:59.999Z" in urls[0]
     assert mock_fetch.await_args.args[1] is None
@@ -2790,3 +2790,46 @@ async def test_dns_failure_grace_period(auth_mock):
             with patch.object(coord_mod.dt_util, "utcnow", return_value=mock_now):
                 with pytest.raises(UpdateFailed):
                     await coordinator._async_update_data()
+
+
+def test_build_export_price_map_transitions_at_net_metering_cutoff():
+    """Export price map uses all-in price before 2027 and market price after."""
+    # 2026-12-31T22:00:00Z is 2026-12-31T23:00:00+01:00 (before cutoff)
+    # 2026-12-31T23:00:00Z is 2027-01-01T00:00:00+01:00 (cutoff exact)
+    # 2027-01-01T00:00:00Z is 2027-01-01T01:00:00+01:00 (after cutoff)
+    all_in = {
+        "2026-12-31T22:00:00.000Z": 25.0,
+        "2026-12-31T23:00:00.000Z": 30.0,
+        "2027-01-01T00:00:00.000Z": 35.0,
+    }
+    market = {
+        "2026-12-31T22:00:00.000Z": 10.0,
+        "2026-12-31T23:00:00.000Z": 12.0,
+        "2027-01-01T00:00:00.000Z": 15.0,
+    }
+
+    result = coord_mod._build_export_price_map(all_in, market)
+
+    assert result["2026-12-31T22:00:00.000Z"] == 25.0
+    assert result["2026-12-31T23:00:00.000Z"] == 12.0
+    assert result["2027-01-01T00:00:00.000Z"] == 15.0
+
+
+def test_build_daily_export_price_map_transitions_at_net_metering_cutoff():
+    """Daily export price map uses all-in before 2027-01-01 and market from 2027-01-01."""
+    all_in = {
+        "2026-12-31": 25.0,
+        "2027-01-01": 30.0,
+        "2027-01-02": 35.0,
+    }
+    market = {
+        "2026-12-31": 10.0,
+        "2027-01-01": 12.0,
+        "2027-01-02": 15.0,
+    }
+
+    result = coord_mod._build_daily_export_price_map(all_in, market)
+
+    assert result["2026-12-31"] == 25.0
+    assert result["2027-01-01"] == 12.0
+    assert result["2027-01-02"] == 15.0

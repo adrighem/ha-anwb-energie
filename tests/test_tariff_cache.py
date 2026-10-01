@@ -28,6 +28,7 @@ tariff_cache = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = tariff_cache
 SPEC.loader.exec_module(tariff_cache)
 
+DailyTariffData = tariff_cache.DailyTariffData
 HourlyTariffData = tariff_cache.HourlyTariffData
 TariffCache = tariff_cache.TariffCache
 
@@ -715,3 +716,61 @@ async def test_prune_retains_only_requested_month_and_year_windows():
         "2025-01-01": 2.0,
         "2026-01-01": 3.0,
     }
+
+
+@pytest.mark.asyncio
+async def test_daily_tariffs_caches_and_persists_market_prices():
+    """Daily tariffs persist both all-in and market prices across restart."""
+    clock = MutableClock(datetime(2026, 7, 15, 12, tzinfo=timezone.utc))
+    store = FakeStore(None)
+    cache = TariffCache(store, "Europe/Amsterdam", clock=clock)
+    required = {date(2026, 6, 1), date(2026, 6, 2)}
+
+    async def fetch_tariffs(_missing: frozenset[date]):
+        return DailyTariffData(
+            all_in_prices={"2026-06-01": 25.0, "2026-06-02": 30.0},
+            market_prices={"2026-06-01": 15.0, "2026-06-02": 20.0},
+        )
+
+    result = await cache.async_get_daily_tariffs("electricity", required, fetch_tariffs)
+    assert dict(result.all_in_prices) == {"2026-06-01": 25.0, "2026-06-02": 30.0}
+    assert dict(result.market_prices) == {"2026-06-01": 15.0, "2026-06-02": 20.0}
+
+    persisted = store.flush()
+    assert persisted["commodities"]["electricity"]["DAY"] == {
+        "2026-06-01": 25.0,
+        "2026-06-02": 30.0,
+    }
+    assert persisted["commodities"]["electricity"]["DAY_MARKET"] == {
+        "2026-06-01": 15.0,
+        "2026-06-02": 20.0,
+    }
+
+    async def must_not_fetch(_missing: frozenset[date]):
+        raise AssertionError("unexpected fetch from warm cache")
+
+    restarted = TariffCache(store, "Europe/Amsterdam", clock=clock)
+    warm = await restarted.async_get_daily_tariffs("electricity", required, must_not_fetch)
+    assert dict(warm.all_in_prices) == {"2026-06-01": 25.0, "2026-06-02": 30.0}
+    assert dict(warm.market_prices) == {"2026-06-01": 15.0, "2026-06-02": 20.0}
+
+
+@pytest.mark.asyncio
+async def test_daily_tariffs_survives_missing_day_market_key():
+    """Legacy store payload without DAY_MARKET loads gracefully."""
+    clock = MutableClock(datetime(2026, 7, 15, 12, tzinfo=timezone.utc))
+    payload = _empty_payload()
+    payload["commodities"]["electricity"]["DAY"] = {"2026-06-01": 25.0}
+    store = FakeStore(payload)
+    cache = TariffCache(store, "Europe/Amsterdam", clock=clock)
+
+    async def must_not_fetch(_missing: frozenset[date]):
+        raise AssertionError("unexpected fetch")
+
+    result = await cache.async_get_daily_tariffs(
+        "electricity",
+        {date(2026, 6, 1)},
+        must_not_fetch,
+    )
+    assert dict(result.all_in_prices) == {"2026-06-01": 25.0}
+    assert dict(result.market_prices) == {}

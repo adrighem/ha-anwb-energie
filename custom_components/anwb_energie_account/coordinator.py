@@ -6,7 +6,7 @@ import asyncio
 import calendar
 import logging
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from typing import Any
@@ -34,6 +34,7 @@ from .const import (
     DOMAIN,
     GRAPHQL_URL,
     KRAKEN_TOKEN_URL,
+    NET_METERING_END_DATE_STR,
     NETBEHEERKOSTEN,
     NETBEHEERKOSTEN_GAS,
     VASTE_LEVERINGSKOSTEN,
@@ -41,7 +42,15 @@ from .const import (
     VERMINDERING_ENERGIEBELASTING,
     VERMINDERING_ENERGIEBELASTING_GAS,
 )
-from .tariff_cache import Commodity, HourlyTariffData, TariffCache
+from .tariff_cache import (
+    Commodity,
+    DailyTariffData,
+    HourlyTariffData,
+    TariffCache,
+    _parse_local_date,
+)
+
+NET_METERING_END_DATE = datetime.fromisoformat(NET_METERING_END_DATE_STR)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -240,20 +249,71 @@ def _local_date_key(value: str | None) -> str | None:
     return local_date.isoformat() if local_date is not None else None
 
 
-def _daily_tariff_map(data_list: list[dict[str, Any]]) -> dict[str, float]:
-    """Return numeric tariff values keyed by Home Assistant local date."""
-    price_map: dict[str, float] = {}
+def _daily_tariff_data(data_list: list[dict[str, Any]]) -> DailyTariffData:
+    """Return normalized all-in and market daily tariff maps."""
+    all_in_prices: dict[str, float] = {}
+    market_prices: dict[str, float] = {}
     for data in data_list:
         local_date = _local_date_key(data.get("date"))
         values = data.get("values")
         if local_date is None or not isinstance(values, dict):
             continue
 
-        price = _numeric_tariff_value(values.get("allInPrijs"))
-        if price is not None:
-            price_map[local_date] = price
+        all_in_price = _numeric_tariff_value(values.get("allInPrijs"))
+        if all_in_price is not None:
+            all_in_prices[local_date] = all_in_price
 
-    return price_map
+        market_price = _numeric_tariff_value(values.get("marktprijs"))
+        if market_price is not None:
+            market_prices[local_date] = market_price
+
+    return DailyTariffData(all_in_prices, market_prices)
+
+
+def _daily_tariff_map(data_list: list[dict[str, Any]]) -> dict[str, float]:
+    """Return numeric tariff values keyed by Home Assistant local date."""
+    return dict(_daily_tariff_data(data_list).all_in_prices)
+
+
+def _build_export_price_map(
+    all_in_prices: Mapping[str, float],
+    market_prices: Mapping[str, float],
+) -> dict[str, float]:
+    """Return export price map applying net metering cutoff date."""
+    export_prices: dict[str, float] = {}
+    all_keys = set(all_in_prices) | set(market_prices)
+    for timestamp in all_keys:
+        dt = _parse_api_datetime(timestamp)
+        if dt is not None and dt >= NET_METERING_END_DATE:
+            market = market_prices.get(timestamp)
+            if market is not None:
+                export_prices[timestamp] = market
+        else:
+            all_in = all_in_prices.get(timestamp)
+            if all_in is not None:
+                export_prices[timestamp] = all_in
+    return export_prices
+
+
+def _build_daily_export_price_map(
+    all_in_prices: Mapping[str, float],
+    market_prices: Mapping[str, float],
+) -> dict[str, float]:
+    """Return daily export price map applying net metering cutoff date."""
+    export_prices: dict[str, float] = {}
+    net_metering_end_day = NET_METERING_END_DATE.date()
+    all_keys = set(all_in_prices) | set(market_prices)
+    for day_str in all_keys:
+        parsed_day = _parse_local_date(day_str)
+        if parsed_day is not None and parsed_day >= net_metering_end_day:
+            market = market_prices.get(day_str)
+            if market is not None:
+                export_prices[day_str] = market
+        else:
+            all_in = all_in_prices.get(day_str)
+            if all_in is not None:
+                export_prices[day_str] = all_in
+    return export_prices
 
 
 def _hourly_tariff_data(
@@ -786,10 +846,10 @@ class ANWBBaseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self,
         commodity: Commodity,
         missing_dates: frozenset[date],
-    ) -> dict[str, float]:
+    ) -> DailyTariffData:
         """Fetch one range containing every missing local DAY tariff."""
         if not missing_dates:
-            return {}
+            return DailyTariffData({}, {})
 
         provider_days = {
             provider_day
@@ -807,7 +867,7 @@ class ANWBBaseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             f"{commodity}?startDate={day_start}&endDate={day_end}&interval=DAY"
         )
         response = await self._async_fetch_data(url, None)
-        return _daily_tariff_map(response.get("data", []) or [])
+        return _daily_tariff_data(response.get("data", []) or [])
 
 
 class ANWBPricingCoordinator(ANWBBaseCoordinator):
@@ -1427,7 +1487,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
         if electricity_daily_dates:
             daily_tariff_kinds.append("electricity")
             daily_tariff_tasks.append(
-                self.tariff_cache.async_get_daily_prices(
+                self.tariff_cache.async_get_daily_tariffs(
                     "electricity",
                     electricity_daily_dates,
                     lambda missing_dates: self._async_fetch_daily_tariffs(
@@ -1439,7 +1499,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
         if gas_daily_dates:
             daily_tariff_kinds.append("gas")
             daily_tariff_tasks.append(
-                self.tariff_cache.async_get_daily_prices(
+                self.tariff_cache.async_get_daily_tariffs(
                     "gas",
                     gas_daily_dates,
                     lambda missing_dates: self._async_fetch_daily_tariffs(
@@ -1460,6 +1520,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
         )
 
         price_map: dict[str, float] = {}
+        market_price_map: dict[str, float] = {}
         for result in prices_results:
             if isinstance(result, Exception):
                 if isinstance(result, UpdateFailed) and "Kraken token expired" in str(
@@ -1472,6 +1533,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
                 )
                 continue
             price_map.update(result.all_in_prices)
+            market_price_map.update(result.market_prices)
 
         gas_price_map: dict[str, float] = {}
         for result in gas_prices_results:
@@ -1488,6 +1550,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
             gas_price_map.update(result.all_in_prices)
 
         daily_electricity_price_map: dict[str, float] = {}
+        daily_electricity_market_price_map: dict[str, float] = {}
         daily_gas_price_map: dict[str, float] = {}
         electricity_daily_tariff_succeeded = not electricity_daily_dates
         gas_daily_tariff_succeeded = not gas_daily_dates
@@ -1511,24 +1574,37 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
                     if kind == "electricity"
                     else gas_daily_dates
                 )
-                cached_prices = (
-                    await self.tariff_cache.async_get_cached_daily_prices(
+                cached_tariffs = (
+                    await self.tariff_cache.async_get_cached_daily_tariffs(
                         kind,
                         required_dates,
                     )
                 )
                 if kind == "electricity":
-                    daily_electricity_price_map = dict(cached_prices)
+                    daily_electricity_price_map = dict(cached_tariffs.all_in_prices)
+                    daily_electricity_market_price_map = dict(
+                        cached_tariffs.market_prices
+                    )
                 else:
-                    daily_gas_price_map = dict(cached_prices)
+                    daily_gas_price_map = dict(cached_tariffs.all_in_prices)
                 continue
 
             if kind == "electricity":
-                daily_electricity_price_map = dict(result)
+                daily_electricity_price_map = dict(result.all_in_prices)
+                daily_electricity_market_price_map = dict(result.market_prices)
                 electricity_daily_tariff_succeeded = True
             else:
-                daily_gas_price_map = dict(result)
+                daily_gas_price_map = dict(result.all_in_prices)
                 gas_daily_tariff_succeeded = True
+
+        export_price_map = _build_export_price_map(
+            price_map,
+            market_price_map,
+        )
+        daily_export_price_map = _build_daily_export_price_map(
+            daily_electricity_price_map,
+            daily_electricity_market_price_map,
+        )
 
         await self.tariff_cache.async_prune()
 
@@ -1591,7 +1667,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
             export_usage,
             export_cost,
             export_tariff_coverage,
-        ) = _usage_and_variable_cost(export_data, price_map)
+        ) = _usage_and_variable_cost(export_data, export_price_map)
         import_cost, import_tariff_coverage = (
             _reconcile_current_month_variable_cost(
                 import_usage,
@@ -1722,7 +1798,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
             export_daily_data,
             export_cost,
             export_tariff_coverage,
-            daily_electricity_price_map,
+            daily_export_price_map,
             current_month_start,
             authoritative_fetch_succeeded=(
                 export_year_fetch_succeeded and not reuse_cached_export_year
@@ -1844,6 +1920,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
             price_map,
             gas_data,
             gas_price_map,
+            export_price_map=export_price_map,
         )
 
         return {
@@ -1866,6 +1943,9 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
                 yearly_export_tariff_coverage
             ),
             "electricity_fixed_cost_source": electricity_fixed_cost_source,
+            "export_price_basis": (
+                "market" if now >= NET_METERING_END_DATE else "all_in"
+            ),
             "gas_month_to_date": gas_usage,
             "gas_month_to_date_cost": gas_cost,
             "gas_year_to_date": yearly_gas_usage,
@@ -1907,13 +1987,17 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
         price_map: dict,
         gas_data: list,
         gas_price_map: dict,
+        export_price_map: dict | None = None,
     ) -> None:
         """Insert ANWB statistics."""
+        if export_price_map is None:
+            export_price_map = price_map
+
         for sensor_type, is_cost, data_list, p_map in [
             ("import_usage", False, import_data, price_map),
             ("export_usage", False, export_data, price_map),
             ("import_cost", True, import_data, price_map),
-            ("export_cost", True, export_data, price_map),
+            ("export_cost", True, export_data, export_price_map),
             ("gas_usage", False, gas_data, gas_price_map),
             ("gas_cost", True, gas_data, gas_price_map),
         ]:

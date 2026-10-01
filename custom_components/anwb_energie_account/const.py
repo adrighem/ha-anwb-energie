@@ -25,3 +25,5 @@ OAUTH2_SCOPES = [
     "email",
     "offline_access",
 ]
+
+NET_METERING_END_DATE_STR = "2027-01-01T00:00:00+01:00"
