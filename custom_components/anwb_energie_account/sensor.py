@@ -165,6 +165,13 @@ GAS_YEAR_DATA_SENSOR_KEYS = {
     "gas_year_to_date_cost",
     "yearly_gas_usage",
 }
+ELECTRICITY_COST_SOURCE_KEYS = (
+    ELECTRICITY_IMPORT_COST_KEYS
+    | ELECTRICITY_EXPORT_COST_KEYS
+    | ELECTRICITY_IMPORT_YEAR_COST_KEYS
+    | ELECTRICITY_EXPORT_YEAR_COST_KEYS
+    | ELECTRICITY_TOTAL_COST_KEYS
+)
 COST_ESTIMATE_SENSOR_KEYS = (
     ELECTRICITY_IMPORT_COST_KEYS
     | ELECTRICITY_EXPORT_COST_KEYS
@@ -733,6 +740,10 @@ class ANWBEnergieAccountSensor(CoordinatorEntity[ANWBBaseCoordinator], SensorEnt
             elif self.entity_description.key in COST_ESTIMATE_SENSOR_KEYS:
                 key = self.entity_description.key
                 attributes: dict[str, Any] = {"estimated": True}
+                if key in ELECTRICITY_COST_SOURCE_KEYS and (
+                    cost_source := self.coordinator.data.get("electricity_cost_source")
+                ):
+                    attributes["cost_source"] = cost_source
 
                 if key in ELECTRICITY_IMPORT_COST_KEYS:
                     attributes["tariff_coverage"] = self.coordinator.data.get(
@@ -753,14 +764,20 @@ class ANWBEnergieAccountSensor(CoordinatorEntity[ANWBBaseCoordinator], SensorEnt
                         "electricity_import_year_to_date_tariff_coverage"
                     )
                     attributes["calculation_method"] = self.coordinator.data.get(
-                        "year_to_date_cost_calculation_method"
+                        "electricity_year_to_date_cost_calculation_method",
+                        self.coordinator.data.get(
+                            "year_to_date_cost_calculation_method"
+                        ),
                     )
                 elif key in ELECTRICITY_EXPORT_YEAR_COST_KEYS:
                     attributes["tariff_coverage"] = self.coordinator.data.get(
                         "electricity_export_year_to_date_tariff_coverage"
                     )
                     attributes["calculation_method"] = self.coordinator.data.get(
-                        "year_to_date_cost_calculation_method"
+                        "electricity_year_to_date_cost_calculation_method",
+                        self.coordinator.data.get(
+                            "year_to_date_cost_calculation_method"
+                        ),
                     )
                     if (
                         export_price_basis := self.coordinator.data.get(

@@ -92,6 +92,10 @@ coord_mod.dt_util.DEFAULT_TIME_ZONE = ZoneInfo("Europe/Amsterdam")
 ANWBConsumptionCoordinator = coord_mod.ANWBConsumptionCoordinator
 ANWBPricingCoordinator = coord_mod.ANWBPricingCoordinator
 DailyTariffData = coord_mod.DailyTariffData
+# The real fetcher, saved before the autouse fixture replaces it.
+REAL_FETCH_KRAKEN_DAILY_COSTS = (
+    ANWBConsumptionCoordinator._async_fetch_kraken_daily_costs
+)
 
 
 @pytest.fixture
@@ -100,6 +104,17 @@ def auth_mock():
     auth.async_get_access_token = AsyncMock(return_value="mock_access_token")
     auth.websession = MagicMock()
     return auth
+
+
+@pytest.fixture(autouse=True)
+def _kraken_costs_unavailable():
+    """Keep calculated costs unless a test provides Kraken statistics itself."""
+    with patch.object(
+        ANWBConsumptionCoordinator,
+        "_async_fetch_kraken_daily_costs",
+        new=AsyncMock(side_effect=coord_mod.KrakenCostError("not provided")),
+    ):
+        yield
 
 
 def _complete_amsterdam_hourly_tariffs(
@@ -2930,3 +2945,375 @@ async def test_insert_statistics_negative_export_market_price(auth_mock):
 
     cost_id = "anwb_energie_account:export_cost_12345"
     assert recorded[cost_id][0].state == pytest.approx(-0.2)
+
+
+AMSTERDAM = ZoneInfo("Europe/Amsterdam")
+KrakenDailyCost = coord_mod.KrakenDailyCost
+
+
+def _kraken_days(
+    start,
+    end_inclusive,
+    used,
+    *,
+    standing=0.0,
+):
+    """Return contiguous Kraken days; ``used`` maps a date to (kWh, variable €)."""
+    days = []
+    current = start
+    while current <= end_inclusive:
+        usage, variable = used.get(current, (0.0, 0.0))
+        days.append(KrakenDailyCost(current, usage, variable, standing, True))
+        current += datetime.timedelta(days=1)
+    return days
+
+
+def _april_account_cache(url, token, *, import_jan=30.0, export_jan=10.0):
+    """Account cache for 20 April 2026: Jan + Apr usage, tail on 20 April."""
+    if "/cache" in url and "interval=HOUR" in url:
+        if "electricity/cache" in url:
+            return {
+                "data": [
+                    {"startDate": "2026-04-01T10:00:00.000Z", "usage": 2.0},
+                    {"startDate": "2026-04-20T10:00:00.000Z", "usage": 1.0},
+                ]
+            }
+        if "production/cache" in url:
+            return {
+                "data": [
+                    {"startDate": "2026-04-01T11:00:00.000Z", "usage": 5.0},
+                    {"startDate": "2026-04-20T11:00:00.000Z", "usage": 2.0},
+                ]
+            }
+        return {"data": []}
+    if "/cache" in url and "interval=MONTH" in url:
+        if "electricity/cache" in url:
+            return {
+                "data": [
+                    {"startDate": "2025-12-31T23:00:00.000Z", "usage": import_jan},
+                    {"startDate": "2026-03-31T22:00:00.000Z", "usage": 3.0},
+                ]
+            }
+        if "production/cache" in url:
+            return {
+                "data": [
+                    {"startDate": "2025-12-31T23:00:00.000Z", "usage": export_jan},
+                    {"startDate": "2026-03-31T22:00:00.000Z", "usage": 7.0},
+                ]
+            }
+        return {"data": []}
+    if "/cache" in url and "interval=DAY" in url:
+        if "electricity/cache" in url:
+            return {
+                "data": [{"startDate": "2025-12-31T23:00:00.000Z", "usage": import_jan}]
+            }
+        if "production/cache" in url:
+            return {
+                "data": [{"startDate": "2025-12-31T23:00:00.000Z", "usage": export_jan}]
+            }
+        return {"data": []}
+    if "tarieven/electricity" in url and "interval=HOUR" in url:
+        return {
+            "data": [
+                *_complete_amsterdam_hourly_tariffs(
+                    datetime.date(2026, 4, 1), all_in_price=20.0, market_price=8.0
+                ),
+                *_complete_amsterdam_hourly_tariffs(
+                    datetime.date(2026, 4, 20), all_in_price=20.0, market_price=8.0
+                ),
+            ]
+        }
+    return {"data": []}
+
+
+def _april_kraken(*, import_jan=30.0, last_day=datetime.date(2026, 4, 19), apr_1=2.0):
+    import_days = _kraken_days(
+        datetime.date(2026, 1, 1),
+        last_day,
+        {
+            datetime.date(2026, 1, 1): (import_jan, 6.0),
+            datetime.date(2026, 4, 1): (apr_1, 0.5),
+        },
+        standing=-0.5,
+    )
+    export_days = _kraken_days(
+        datetime.date(2026, 1, 1),
+        last_day,
+        {
+            datetime.date(2026, 1, 1): (10.0, -1.5),
+            datetime.date(2026, 4, 1): (5.0, -0.6),
+        },
+    )
+
+    async def fetch(direction, start, end_exclusive):
+        assert start == datetime.date(2026, 1, 1)
+        assert end_exclusive == datetime.date(2026, 4, 21)
+        return import_days if direction == "CONSUMPTION" else export_days
+
+    return fetch
+
+
+async def _run_april_update(coordinator, kraken_fetch, cache=_april_account_cache):
+    mock_now = datetime.datetime(2026, 4, 20, 12, tzinfo=datetime.timezone.utc)
+    with (
+        patch.object(coord_mod.dt_util, "utcnow", return_value=mock_now),
+        patch.object(
+            coord_mod.dt_util,
+            "as_local",
+            side_effect=lambda value: value.astimezone(AMSTERDAM),
+        ),
+        patch.object(coordinator, "_async_fetch_data", new_callable=AsyncMock) as fetch,
+        patch.object(
+            coordinator,
+            "_async_fetch_kraken_daily_costs",
+            new_callable=AsyncMock,
+        ) as kraken,
+        patch.object(coordinator, "_insert_statistics", new_callable=AsyncMock),
+    ):
+        fetch.side_effect = cache
+        kraken.side_effect = kraken_fetch
+        return await coordinator._async_update_data_internal()
+
+
+def _april_coordinator(auth_mock):
+    coordinator = ANWBConsumptionCoordinator(MagicMock(), auth_mock, MagicMock())
+    coordinator._kraken_token = "mock_kraken_token"
+    coordinator._account_number = "12345"
+    coordinator._account_address = "Mock Address"
+    return coordinator
+
+
+@pytest.mark.asyncio
+async def test_kraken_statistics_replace_calculated_electricity_costs(auth_mock):
+    """Kraken daily costs cover closed days; the hourly tail is calculated."""
+    coordinator = _april_coordinator(auth_mock)
+
+    result = await _run_april_update(coordinator, _april_kraken())
+
+    # April: Kraken 0.50 + tail 1 kWh × €0.20.
+    assert result["electricity_import_month_to_date_cost"] == pytest.approx(0.7)
+    # Kraken reports generation as -0.60; tail 2 kWh × €0.20 (all-in in 2026).
+    assert result["electricity_export_month_to_date_credit"] == pytest.approx(1.0)
+    assert result["electricity_import_year_to_date_cost"] == pytest.approx(6.7)
+    assert result["electricity_export_year_to_date_credit"] == pytest.approx(2.5)
+    # Standing charges for 1-19 April, not the hardcoded fallback.
+    assert result["electricity_month_to_date_fixed_cost"] == pytest.approx(-9.5)
+    assert result["electricity_fixed_cost_source"] == "kraken_statistics"
+    assert result["electricity_month_to_date_total_cost"] == pytest.approx(-9.8)
+    assert result["electricity_cost_source"] == "kraken_statistics"
+    assert result["electricity_provider_costs_status"] == "ok"
+    assert result["electricity_provider_costs_through"] == "2026-04-19"
+    assert result["electricity_year_to_date_cost_calculation_method"] == (
+        "kraken_daily_statistics_hourly_tail"
+    )
+    # Gas keeps its own calculation, so the shared key is unchanged.
+    assert result["year_to_date_cost_calculation_method"] == (
+        "daily_closed_months_hourly_current_month"
+    )
+    coverage = result["electricity_import_tariff_coverage"]
+    assert coverage["complete"] is True
+    assert coverage["required_intervals"] == 20  # 19 Kraken days + 1 tail hour
+    assert coverage["provider_costs_through"] == "2026-04-19"
+    assert result["electricity_import_year_to_date_tariff_coverage"][
+        "required_intervals"
+    ] == 110
+
+
+@pytest.mark.asyncio
+async def test_kraken_closed_month_usage_mismatch_keeps_calculated_costs(auth_mock):
+    """Kraken totals that disagree with the account cache are not used."""
+    coordinator = _april_coordinator(auth_mock)
+
+    result = await _run_april_update(coordinator, _april_kraken(import_jan=29.0))
+
+    assert result["electricity_cost_source"] == "calculated"
+    assert result["electricity_provider_costs_status"] == (
+        "closed_month_usage_mismatch"
+    )
+    assert result["electricity_fixed_cost_source"] == "hardcoded_fallback"
+    # Calculated: 3 kWh × €0.20.
+    assert result["electricity_import_month_to_date_cost"] == pytest.approx(0.6)
+
+
+@pytest.mark.asyncio
+async def test_kraken_current_month_usage_mismatch_keeps_calculated_costs(
+    auth_mock,
+):
+    """Covered current-month days must match the hourly account cache."""
+    coordinator = _april_coordinator(auth_mock)
+
+    result = await _run_april_update(coordinator, _april_kraken(apr_1=1.5))
+
+    assert result["electricity_cost_source"] == "calculated"
+    assert result["electricity_provider_costs_status"] == (
+        "current_month_usage_mismatch"
+    )
+
+
+@pytest.mark.asyncio
+async def test_kraken_missing_closed_day_keeps_calculated_costs(auth_mock):
+    """Closed months cannot be completed from hourly data."""
+    coordinator = _april_coordinator(auth_mock)
+
+    result = await _run_april_update(
+        coordinator,
+        _april_kraken(last_day=datetime.date(2026, 3, 30)),
+    )
+
+    assert result["electricity_cost_source"] == "calculated"
+    assert result["electricity_provider_costs_status"] == "closed_days_incomplete"
+
+
+@pytest.mark.asyncio
+async def test_kraken_failure_reuses_last_statistics_of_same_year(auth_mock):
+    """A transient Kraken failure keeps the last complete statistics."""
+    coordinator = _april_coordinator(auth_mock)
+    await _run_april_update(coordinator, _april_kraken())
+
+    async def failing(direction, start, end_exclusive):
+        raise coord_mod.KrakenCostError("temporary")
+
+    result = await _run_april_update(coordinator, failing)
+
+    assert result["electricity_cost_source"] == "kraken_statistics"
+    assert result["electricity_import_year_to_date_cost"] == pytest.approx(6.7)
+
+
+@pytest.mark.asyncio
+async def test_kraken_failure_without_previous_statistics(auth_mock):
+    """Without earlier statistics, a Kraken failure keeps calculated costs."""
+    coordinator = _april_coordinator(auth_mock)
+
+    async def failing(direction, start, end_exclusive):
+        raise coord_mod.KrakenCostError("unavailable")
+
+    result = await _run_april_update(coordinator, failing)
+
+    assert result["electricity_cost_source"] == "calculated"
+    assert result["electricity_provider_costs_status"] == "fetch_failed"
+    assert result["electricity_provider_costs_through"] is None
+
+
+class _FakeResponse:
+    def __init__(self, payload):
+        self._payload = payload
+        self.raise_for_status = MagicMock()
+
+    async def json(self):
+        return self._payload
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+
+@pytest.mark.asyncio
+async def test_fetch_kraken_daily_costs_follows_pages(auth_mock):
+    """The fetcher sends the account, local range and cursor, and pages."""
+    coordinator = _april_coordinator(auth_mock)
+
+    def page(day, cursor):
+        return {
+            "data": {
+                "account": {
+                    "properties": [
+                        {
+                            "measurements": {
+                                "pageInfo": {
+                                    "hasNextPage": cursor is not None,
+                                    "endCursor": cursor,
+                                },
+                                "edges": [
+                                    {
+                                        "node": {
+                                            "value": "1.0",
+                                            "startAt": f"{day}T00:00:00+02:00",
+                                            "metaData": {
+                                                "statistics": [
+                                                    {
+                                                        "type": "CONSUMPTION_COST",
+                                                        "costInclTax": {
+                                                            "estimatedAmount": "25"
+                                                        },
+                                                    }
+                                                ]
+                                            },
+                                        }
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+
+    responses = [
+        _FakeResponse(page("2026-04-01", "c1")),
+        _FakeResponse(page("2026-04-02", None)),
+    ]
+    auth_mock.websession.post = MagicMock(side_effect=responses)
+
+    with patch.object(
+        coord_mod,
+        "_configured_time_zone_name",
+        return_value="Europe/Amsterdam",
+    ):
+        days = await REAL_FETCH_KRAKEN_DAILY_COSTS(
+            coordinator,
+            "GENERATION",
+            datetime.date(2026, 4, 1),
+            datetime.date(2026, 4, 3),
+        )
+
+    assert [day.day for day in days] == [
+        datetime.date(2026, 4, 1),
+        datetime.date(2026, 4, 2),
+    ]
+    assert days[0].variable_cost == pytest.approx(0.25)
+    first_call, second_call = auth_mock.websession.post.call_args_list
+    assert first_call.args[0] == coord_mod.GRAPHQL_URL
+    assert first_call.kwargs["headers"]["Authorization"] == "Bearer mock_kraken_token"
+    variables = first_call.kwargs["json"]["variables"]
+    assert variables["accountNumber"] == "12345"
+    assert variables["direction"] == "GENERATION"
+    assert variables["startAt"] == "2026-04-01T00:00:00+02:00"
+    assert variables["endAt"] == "2026-04-03T00:00:00+02:00"
+    assert variables["after"] is None
+    assert second_call.kwargs["json"]["variables"]["after"] == "c1"
+    for response in responses:
+        response.raise_for_status.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_fetch_kraken_daily_costs_limits_pages(auth_mock):
+    """A cursor that never ends raises instead of looping forever."""
+    coordinator = _april_coordinator(auth_mock)
+    endless = {
+        "data": {
+            "account": {
+                "properties": [
+                    {
+                        "measurements": {
+                            "pageInfo": {"hasNextPage": True, "endCursor": "again"},
+                            "edges": [],
+                        }
+                    }
+                ]
+            }
+        }
+    }
+    auth_mock.websession.post = MagicMock(
+        side_effect=lambda *args, **kwargs: _FakeResponse(endless)
+    )
+
+    with pytest.raises(coord_mod.KrakenCostError):
+        await REAL_FETCH_KRAKEN_DAILY_COSTS(
+            coordinator,
+            "CONSUMPTION",
+            datetime.date(2026, 4, 1),
+            datetime.date(2026, 4, 3),
+        )
+    assert auth_mock.websession.post.call_count == coord_mod.KRAKEN_MAX_PAGES
