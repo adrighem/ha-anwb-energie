@@ -8,6 +8,29 @@ Use the entities below together with the fixed charges from your own contract
 or invoice to create account-specific totals. These calculations are intended
 for overview cards. Do not use them as Energy Dashboard inputs.
 
+## Provider cost statistics for electricity
+
+When available, electricity costs come from ANWB's daily cost statistics: the
+Kraken `measurements` query with `DAY_INTERVAL` readings, which the ANWB app
+uses as well. Each day lists its cost lines in euro cents including VAT:
+
+- `CONSUMPTION_COST` lines are variable costs: market price, purchasing costs
+  and energy tax for import, and the export value for generation. Under net
+  metering, the energy-tax and purchasing refunds on generation cover only the
+  netted kWh. Kraken nets per month; the annual settlement nets per year.
+- `STANDING_CHARGE_COST` lines are the daily fixed delivery charge, grid fee
+  and energy-tax reduction.
+
+The integration uses these statistics only when every closed day of the year is
+covered and the usage matches the account-cache `MONTH` rows for closed months
+and the `HOUR` rows for covered days of the current month. Hours after the last
+covered day, usually today, use the hourly tariff calculation below. If the
+statistics are missing, rejected or temporarily unavailable, the last complete
+statistics of the same year are reused, or the calculation below is used.
+
+The `cost_source` attribute shows `kraken_statistics` or `calculated`. Gas
+always uses the calculation below.
+
 ## What the integration calculates
 
 For each non-zero usage interval, the integration requires a matching ANWB
@@ -271,8 +294,10 @@ State template:
   is incomplete, the source cost entity and the Template Helper are
   unavailable instead of treating the missing tariff as €0.
 - Zero and negative tariffs are valid.
-- Export value uses the electricity all-in tariff. Under annual saldering it is
-  not the final compensation on the provider's annual settlement.
+- Calculated export value uses the electricity all-in tariff until 2027. Under
+  annual saldering it is not the final compensation on the provider's annual
+  settlement. Provider statistics net per month, which is closer but still not
+  the annual settlement.
 - Do not clamp a negative export value to zero. Subtracting a negative value
   correctly increases the estimated net electricity cost.
 - Persisted `DAY` tariffs make the completed-month part of a year-to-date value

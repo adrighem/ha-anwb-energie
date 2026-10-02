@@ -67,6 +67,37 @@ Design implication:
   values or provider-billed values. The currently verified cache cost fields do
   not support provider-billed cost entities.
 
+## 2026-10-02 Kraken Measurement Cost Statistics
+
+The account-cache cost objects above stayed zero for a verified account with
+`hasGap: true` rows. The amounts the ANWB app shows come from Kraken GraphQL:
+`account.properties.measurements` with `utilityFilters` on
+`electricityFilters.readingFrequencyType` and `readingDirection`
+(`CONSUMPTION` or `GENERATION`), selecting `metaData.statistics`.
+
+Observed behavior:
+
+- `HOUR_INTERVAL` readings return usage but an empty `statistics` list.
+- `DAY_INTERVAL` readings return statistics for every day, including the
+  current month, and a whole year fits in one page of 400. Data runs through
+  the previous local day.
+- `MONTH_INTERVAL` readings return statistics only when the requested range
+  contains no current or future month; including the current month empties the
+  statistics of every returned month.
+- `QUARTER_INTERVAL` returns `measurements: null`.
+- Statistic amounts are euro cents in `costInclTax.estimatedAmount` and
+  `costExclTax.estimatedAmount`, as decimal strings.
+- Consumption labels: `SUPPLIER_DYNAMIC_COST`, `ENERGY_TAX_STEP_1` and
+  `SUPPLIER_PURCHASING_COST` (type `CONSUMPTION_COST`); `SUPPLIER_FIXED_COST`,
+  `GRID_FEE` and `ENERGY_TAX_REDUCTION` (type `STANDING_CHARGE_COST`).
+- Generation labels: `GENERATION_SUPPLIER_DYNAMIC_COST` over all exported kWh,
+  and `GENERATION_ENERGY_TAX_STEP_1` and `GENERATION_SUPPLIER_PURCHASING_COST`
+  over the netted kWh only, all negative.
+- Daily statistics summed per month equal the `MONTH_INTERVAL` statistics, and
+  daily usage equals the account-cache `MONTH` usage for closed months.
+- Kraken nets per month: the netted kWh is the smaller of that month's import
+  and export.
+
 ## 2026-07-23 Historical Tariff Ranges
 
 A public, unauthenticated follow-up checked the v2 electricity and gas tariff

@@ -42,6 +42,18 @@ from .const import (
     VERMINDERING_ENERGIEBELASTING,
     VERMINDERING_ENERGIEBELASTING_GAS,
 )
+from .kraken_costs import (
+    DAILY_COSTS_QUERY,
+    KRAKEN_MAX_PAGES,
+    KRAKEN_PAGE_SIZE,
+    Direction,
+    KrakenCostError,
+    KrakenDailyCost,
+    KrakenElectricityCosts,
+    build_electricity_costs,
+    parse_daily_costs_page,
+    usage_matches,
+)
 from .tariff_cache import (
     Commodity,
     DailyTariffData,
@@ -601,6 +613,173 @@ def _year_to_date_variable_cost(
     return cost, coverage
 
 
+@dataclass(frozen=True)
+class _ProviderElectricityCosts:
+    """Electricity costs from Kraken statistics plus an hourly calculated tail."""
+
+    import_month_cost: float | None
+    export_month_credit: float | None
+    import_year_cost: float | None
+    export_year_credit: float | None
+    import_coverage: dict[str, Any]
+    export_coverage: dict[str, Any]
+    import_year_coverage: dict[str, Any]
+    export_year_coverage: dict[str, Any]
+    fixed_cost: float
+    covered_through: date | None
+
+
+def _cache_usage_per_closed_month(
+    data_list: list[dict[str, Any]],
+    current_month_start: date,
+) -> dict[date, float] | None:
+    """Sum account-cache MONTH rows per closed local month."""
+    totals: dict[date, float] = {}
+    for data in data_list:
+        local_date = _local_date_for_api_datetime(data.get("startDate"))
+        if local_date is None:
+            return None
+        month = local_date.replace(day=1)
+        if month < current_month_start:
+            totals[month] = totals.get(month, 0.0) + data.get("usage", 0.0)
+    return totals
+
+
+def _months_match(
+    cache_usage: dict[date, float],
+    provider_usage: dict[date, float],
+) -> bool:
+    return all(
+        usage_matches(cache_usage.get(month, 0.0), provider_usage.get(month, 0.0))
+        for month in set(cache_usage) | set(provider_usage)
+    )
+
+
+def _split_at_provider_coverage(
+    data_list: list[dict[str, Any]],
+    covered_through: date | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split hourly rows into days covered by Kraken and the remaining tail."""
+    covered: list[dict[str, Any]] = []
+    tail: list[dict[str, Any]] = []
+    for data in data_list:
+        local_date = _local_date_for_api_datetime(data.get("startDate"))
+        if (
+            covered_through is not None
+            and local_date is not None
+            and local_date <= covered_through
+        ):
+            covered.append(data)
+        else:
+            tail.append(data)
+    return covered, tail
+
+
+def _provider_coverage(
+    days: int,
+    covered_through: date | None,
+    tail_coverage: dict[str, Any],
+) -> dict[str, Any]:
+    provider = {
+        "complete": True,
+        "required_intervals": days,
+        "matched_intervals": days,
+        "missing_intervals_count": 0,
+        "missing_intervals": [],
+    }
+    coverage = _combine_tariff_coverage(provider, tail_coverage)
+    coverage["provider_costs_through"] = (
+        covered_through.isoformat() if covered_through is not None else None
+    )
+    return coverage
+
+
+def _provider_electricity_costs(
+    provider: KrakenElectricityCosts,
+    *,
+    import_data: list[dict[str, Any]],
+    export_data: list[dict[str, Any]],
+    import_year_data: list[dict[str, Any]] | None,
+    export_year_data: list[dict[str, Any]] | None,
+    price_map: dict[str, float],
+    export_price_map: dict[str, float],
+    current_month_start: date,
+) -> _ProviderElectricityCosts | str:
+    """Combine Kraken daily costs with hourly costs for uncovered intervals.
+
+    Returns a reason string when the provider data does not match the
+    account-cache usage, so the caller can keep the calculated estimates.
+    ``*_year_data`` is ``None`` when the MONTH request failed; the closed-month
+    comparison is then skipped and Kraken is trusted on its own.
+    """
+    for year_data, provider_usage in (
+        (import_year_data, provider.closed_month_import_usage),
+        (export_year_data, provider.closed_month_export_usage),
+    ):
+        if year_data is None:
+            continue
+        cache_usage = _cache_usage_per_closed_month(year_data, current_month_start)
+        if cache_usage is None:
+            return "account_cache_month_invalid"
+        if not _months_match(cache_usage, provider_usage):
+            return "closed_month_usage_mismatch"
+
+    through = provider.covered_through
+    covered_import, tail_import = _split_at_provider_coverage(import_data, through)
+    covered_export, tail_export = _split_at_provider_coverage(export_data, through)
+    if not usage_matches(
+        sum(data.get("usage", 0.0) for data in covered_import),
+        provider.month_import.usage,
+    ) or not usage_matches(
+        sum(data.get("usage", 0.0) for data in covered_export),
+        provider.month_export.usage,
+    ):
+        return "current_month_usage_mismatch"
+
+    _, tail_import_cost, tail_import_coverage = _usage_and_variable_cost(
+        tail_import, price_map
+    )
+    _, tail_export_cost, tail_export_coverage = _usage_and_variable_cost(
+        tail_export, export_price_map
+    )
+
+    def _with_tail(provider_amount: float, tail: float | None) -> float | None:
+        return provider_amount + tail if tail is not None else None
+
+    # Kraken reports generation as negative costs; sensors expose a credit.
+    return _ProviderElectricityCosts(
+        import_month_cost=_with_tail(
+            provider.month_import.variable_cost, tail_import_cost
+        ),
+        export_month_credit=_with_tail(
+            -provider.month_export.variable_cost, tail_export_cost
+        ),
+        import_year_cost=_with_tail(
+            provider.year_import.variable_cost, tail_import_cost
+        ),
+        export_year_credit=_with_tail(
+            -provider.year_export.variable_cost, tail_export_cost
+        ),
+        import_coverage=_provider_coverage(
+            provider.month_import.days, through, tail_import_coverage
+        ),
+        export_coverage=_provider_coverage(
+            provider.month_export.days, through, tail_export_coverage
+        ),
+        import_year_coverage=_provider_coverage(
+            provider.year_import.days, through, tail_import_coverage
+        ),
+        export_year_coverage=_provider_coverage(
+            provider.year_export.days, through, tail_export_coverage
+        ),
+        fixed_cost=(
+            provider.month_import.standing_charge
+            + provider.month_export.standing_charge
+        ),
+        covered_through=through,
+    )
+
+
 class ANWBBaseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Base coordinator to manage ANWB token and account."""
 
@@ -1128,6 +1307,97 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
             config_entry=config_entry,
             tariff_cache=tariff_cache,
         )
+        # Last complete Kraken daily costs: (year start, import days, export days).
+        # Closed days do not change, so a transient failure can reuse them.
+        self._kraken_daily_costs: (
+            tuple[date, list[KrakenDailyCost], list[KrakenDailyCost]] | None
+        ) = None
+
+    async def _async_fetch_kraken_daily_costs(
+        self,
+        direction: Direction,
+        start: date,
+        end_exclusive: date,
+    ) -> list[KrakenDailyCost]:
+        """Fetch provider-calculated daily electricity costs from Kraken."""
+        time_zone = _configured_time_zone()
+        variables: dict[str, Any] = {
+            "accountNumber": self._account_number,
+            "startAt": datetime.combine(start, time.min, tzinfo=time_zone).isoformat(),
+            "endAt": datetime.combine(
+                end_exclusive, time.min, tzinfo=time_zone
+            ).isoformat(),
+            "timezone": _configured_time_zone_name(),
+            "direction": direction,
+            "first": KRAKEN_PAGE_SIZE,
+            "after": None,
+        }
+        headers = {
+            "Authorization": f"Bearer {self._kraken_token}",
+            "Content-Type": "application/json",
+        }
+        days: list[KrakenDailyCost] = []
+        for _ in range(KRAKEN_MAX_PAGES):
+            async with self.auth.websession.post(
+                GRAPHQL_URL,
+                json={"query": DAILY_COSTS_QUERY, "variables": dict(variables)},
+                headers=headers,
+            ) as resp:
+                resp.raise_for_status()
+                payload = await resp.json()
+            page, cursor = parse_daily_costs_page(payload, time_zone)
+            days.extend(page)
+            if cursor is None:
+                return days
+            variables["after"] = cursor
+        raise KrakenCostError("Kraken returned more daily pages than expected")
+
+    async def _async_get_kraken_electricity_costs(
+        self,
+        now: datetime,
+        current_month_start: date,
+    ) -> KrakenElectricityCosts | str:
+        """Return Kraken daily costs for this year, or why they are unavailable."""
+        year_start = current_month_start.replace(month=1)
+        end_exclusive = now.date() + timedelta(days=1)
+        results = await asyncio.gather(
+            self._async_fetch_kraken_daily_costs(
+                "CONSUMPTION", year_start, end_exclusive
+            ),
+            self._async_fetch_kraken_daily_costs(
+                "GENERATION", year_start, end_exclusive
+            ),
+            return_exceptions=True,
+        )
+        failure = next(
+            (result for result in results if isinstance(result, BaseException)),
+            None,
+        )
+        if failure is None:
+            self._kraken_daily_costs = (year_start, results[0], results[1])
+        elif (
+            self._kraken_daily_costs is not None
+            and self._kraken_daily_costs[0] == year_start
+        ):
+            _LOGGER.debug(
+                "Kraken cost statistics unavailable, reusing the last result: %s",
+                failure,
+            )
+        else:
+            _LOGGER.debug(
+                "Kraken cost statistics unavailable, using calculated costs: %s",
+                failure,
+            )
+            return "fetch_failed"
+
+        _, import_days, export_days = self._kraken_daily_costs
+        costs = build_electricity_costs(
+            import_days,
+            export_days,
+            year_start=year_start,
+            current_month_start=current_month_start,
+        )
+        return costs if costs is not None else "closed_days_incomplete"
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from ANWB API."""
@@ -1661,6 +1931,50 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
             export_cost,
             export_tariff_coverage,
         ) = _usage_and_variable_cost(export_data, export_price_map)
+
+        # Prefer the amounts Kraken calculates (the figures shown in the ANWB
+        # app): they price every hour, include the provider's net-metering and
+        # real fixed charges, and switch to market-price export automatically.
+        # Intervals after the last covered day keep the hourly calculation.
+        provider_result = await self._async_get_kraken_electricity_costs(
+            now, current_month_start
+        )
+        provider_costs: _ProviderElectricityCosts | None = None
+        if isinstance(provider_result, str):
+            provider_costs_status = provider_result
+        else:
+            provider_split = _provider_electricity_costs(
+                provider_result,
+                import_data=import_data,
+                export_data=export_data,
+                import_year_data=(
+                    import_year_data
+                    if import_year_fetch_succeeded and not reuse_cached_import_year
+                    else None
+                ),
+                export_year_data=(
+                    export_year_data
+                    if export_year_fetch_succeeded and not reuse_cached_export_year
+                    else None
+                ),
+                price_map=price_map,
+                export_price_map=export_price_map,
+                current_month_start=current_month_start,
+            )
+            if isinstance(provider_split, str):
+                provider_costs_status = provider_split
+                _LOGGER.debug(
+                    "Kraken cost statistics rejected (%s), using calculated costs",
+                    provider_split,
+                )
+            else:
+                provider_costs = provider_split
+                provider_costs_status = "ok"
+                import_cost = provider_costs.import_month_cost
+                import_tariff_coverage = provider_costs.import_coverage
+                export_cost = provider_costs.export_month_credit
+                export_tariff_coverage = provider_costs.export_coverage
+
         import_cost, import_tariff_coverage = (
             _reconcile_current_month_variable_cost(
                 import_usage,
@@ -1800,6 +2114,22 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
             daily_tariff_succeeded=electricity_daily_tariff_succeeded,
         )
 
+        if provider_costs is not None:
+            # A current month rejected by the reconciliation above also
+            # invalidates the year-to-date total that contains it.
+            if import_cost is not None:
+                yearly_import_cost = provider_costs.import_year_cost
+                yearly_import_tariff_coverage = provider_costs.import_year_coverage
+            else:
+                yearly_import_cost = None
+                yearly_import_tariff_coverage = import_tariff_coverage
+            if export_cost is not None:
+                yearly_export_cost = provider_costs.export_year_credit
+                yearly_export_tariff_coverage = provider_costs.export_year_coverage
+            else:
+                yearly_export_cost = None
+                yearly_export_tariff_coverage = export_tariff_coverage
+
         api_vaste_kosten_gas = 0.0
         if gas_data:
             vk = gas_data[0].get("vasteKosten")
@@ -1855,7 +2185,10 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
                 daily_tariff_succeeded=gas_daily_tariff_succeeded,
             )
 
-        if abs(api_vaste_kosten) > 0.01:
+        if provider_costs is not None:
+            total_fixed_costs = provider_costs.fixed_cost
+            electricity_fixed_cost_source = "kraken_statistics"
+        elif abs(api_vaste_kosten) > 0.01:
             total_fixed_costs = api_vaste_kosten
             electricity_fixed_cost_source = "account_cache"
         else:
@@ -1968,6 +2301,21 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
             "yearly_period_start": yearly_period_start,
             "year_to_date_cost_calculation_method": (
                 "daily_closed_months_hourly_current_month"
+            ),
+            "electricity_year_to_date_cost_calculation_method": (
+                "kraken_daily_statistics_hourly_tail"
+                if provider_costs is not None
+                else "daily_closed_months_hourly_current_month"
+            ),
+            "electricity_cost_source": (
+                "kraken_statistics" if provider_costs is not None else "calculated"
+            ),
+            "electricity_provider_costs_status": provider_costs_status,
+            "electricity_provider_costs_through": (
+                provider_costs.covered_through.isoformat()
+                if provider_costs is not None
+                and provider_costs.covered_through is not None
+                else None
             ),
             "account_number": self._account_number,
             "account_address": getattr(self, "_account_address", None),
