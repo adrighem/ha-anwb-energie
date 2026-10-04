@@ -204,8 +204,17 @@ applied at insertion time and are not retroactively rewritten.
 
 ## Cost estimates
 
-All cost entities and imported cost statistics are tariff estimates. They are
-not amounts billed by ANWB.
+All cost entities and imported cost statistics are estimates. They are not
+amounts billed by ANWB.
+
+Electricity month-to-date and year-to-date costs, export values, and fixed
+charges come from ANWB's own daily cost statistics (Kraken `measurements`,
+the figures the ANWB app shows) when they are available and agree with the
+account-cache usage. Those statistics price every hour, apply net metering
+(saldering) to the netted kWh only, include the account's real fixed charges,
+and switch export to market prices on 1 January 2027 by themselves. Hours after
+the last available day use the tariff calculation below. The `cost_source`
+attribute reports `kraken_statistics` or `calculated`. Otherwise:
 
 - Month-to-date values match `HOUR` usage to `HOUR` all-in tariffs.
 - Year-to-date values combine the current month's hourly calculation with
@@ -244,8 +253,8 @@ fallback is:
 - gas: €8.50 delivery charges and €17.50 network charges.
 
 These values may not match the account, network region, or current contract.
-The `fixed_cost_source` attribute reports either `account_cache` or
-`hardcoded_fallback`.
+The `fixed_cost_source` attribute reports `kraken_statistics`,
+`account_cache`, or `hardcoded_fallback`.
 
 Review dashboards, automations, and history before removing a legacy entity.
 

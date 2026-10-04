@@ -1109,3 +1109,43 @@ def test_cost_sensors_expose_export_price_basis(key):
     description = next(desc for desc in SENSOR_TYPES if desc.key == key)
     sensor = ANWBEnergieAccountSensor(coordinator, description)
     assert sensor.extra_state_attributes.get("export_price_basis") == "market"
+
+
+def test_electricity_cost_sensors_expose_kraken_cost_source():
+    """Electricity cost sensors show the cost source; gas keeps its method."""
+    coordinator = MagicMock()
+    coordinator.data = {
+        "account_number": "12345",
+        "electricity_cost_source": "kraken_statistics",
+        "electricity_year_to_date_cost_calculation_method": (
+            "kraken_daily_statistics_hourly_tail"
+        ),
+        "year_to_date_cost_calculation_method": (
+            "daily_closed_months_hourly_current_month"
+        ),
+        "electricity_fixed_cost_source": "kraken_statistics",
+    }
+
+    def attributes(key):
+        description = next(desc for desc in SENSOR_TYPES if desc.key == key)
+        return ANWBEnergieAccountSensor(coordinator, description).extra_state_attributes
+
+    for key in (
+        "electricity_import_month_to_date_cost",
+        "electricity_export_month_to_date_credit",
+        "electricity_import_year_to_date_cost",
+        "electricity_export_year_to_date_credit",
+        "electricity_month_to_date_total_cost",
+    ):
+        assert attributes(key)["cost_source"] == "kraken_statistics"
+
+    assert attributes("electricity_import_year_to_date_cost")[
+        "calculation_method"
+    ] == "kraken_daily_statistics_hourly_tail"
+    assert "cost_source" not in attributes("electricity_month_to_date_fixed_cost")
+    assert attributes("electricity_month_to_date_fixed_cost")[
+        "fixed_cost_source"
+    ] == "kraken_statistics"
+    gas = attributes("gas_year_to_date_cost")
+    assert "cost_source" not in gas
+    assert gas["calculation_method"] == "daily_closed_months_hourly_current_month"
