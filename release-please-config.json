@@ -2,6 +2,7 @@
   "include-commit-authors": true,
   "packages": {
     ".": {
+      "include-commit-authors": true,
       "release-type": "simple",
       "extra-files": [
         {
