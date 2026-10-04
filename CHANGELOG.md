@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.0](https://github.com/adrighem/ha-anwb-energie/compare/v1.3.5...v1.4.0) (2026-10-04)
+
+
+### Features
+
+* use ANWB's daily cost statistics from Kraken for electricity costs (closes [#23](https://github.com/adrighem/ha-anwb-energie/issues/23)) ([#24](https://github.com/adrighem/ha-anwb-energie/issues/24)) ([bd6106f](https://github.com/adrighem/ha-anwb-energie/commit/bd6106f933ea93ef2ca270e6b59322cfacf3fe07))
+
 ## [1.3.5](https://github.com/adrighem/ha-anwb-energie/compare/v1.3.4...v1.3.5) (2026-10-01)
 
 
