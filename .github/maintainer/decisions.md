@@ -66,3 +66,32 @@ field without an official definition or stronger observations.
 
 Evidence: authenticated observations, ANWB's missing-meter-data explanation,
 the mobile bundle inspection, and the resolution of ISSUE:17.
+
+## 2026-10-23: Chunked DAY tariff requests
+
+Merged PR:31 (fixes ISSUE:28). DAY tariff requests stay at most 190 labels per
+window with a two-label overlap, because the endpoint returns null prices
+after 200 priced rows.
+
+## 2026-10-23: Market-price retries must be bounded
+
+Requested changes on PR:32. Retry missing hourly market prices only for days
+on or after `NET_METERING_END_DATE`, and bound retries per day.
+
+## 2026-10-23: Kraken export credit semantics (ISSUE:29)
+
+Do not add a per-month EUR/kWh plausibility guard on the Kraken export credit.
+Netting refund lines likely accrue cumulatively, so a month can carry refunds
+for more kWh than it exported. Prefer splitting market value from netting
+refund via statistic `label` and `value`, and guard only on YTD netted kWh.
+The "per month = min(import, export)" rule rests on one account and one month.
+
+## 2026-10-23: Export credit vs export market value (ISSUE:29)
+
+Keep the provider-booked credit (Kraken, incl. net-metering refund) as the
+state of the existing export sensors, renamed "Estimated electricity export
+credit month/year to date" with unchanged `unique_id`. Add new sensors
+"Estimated electricity export market value month/year to date" from Kraken
+`GENERATION_SUPPLIER_DYNAMIC_COST` lines plus a market-priced tail. Expose
+`net_metering_refund`, `other`, `cost_source`, `tail_kwh` on the credit
+sensors and fix `export_price_basis`.
