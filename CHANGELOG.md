@@ -11,7 +11,7 @@
 
 ### Bug Fixes
 
-* split daily tariff requests below the 200-price limit ([#31](https://github.com/adrighem/ha-anwb-energie/issues/31)) ([4e1cdee](https://github.com/adrighem/ha-anwb-energie/commit/4e1cdeee806b8f7b9cdb48824170ee6adfa7c362))
+* split daily tariff requests below the 200-price limit ([#31](https://github.com/adrighem/ha-anwb-energie/issues/31)) ([4e1cdee](https://github.com/adrighem/ha-anwb-energie/commit/4e1cdeee806b8f7b9cdb48824170ee6adfa7c362)) (@Remc0000)
 * sum hourly account-cache fixed charges (fixes [#30](https://github.com/adrighem/ha-anwb-energie/issues/30)) ([10d384c](https://github.com/adrighem/ha-anwb-energie/commit/10d384ccf4ef6644775aeae0036ac3d460aae5ad))
 
 ## [1.4.1](https://github.com/adrighem/ha-anwb-energie/compare/v1.4.0...v1.4.1) (2026-10-16)
