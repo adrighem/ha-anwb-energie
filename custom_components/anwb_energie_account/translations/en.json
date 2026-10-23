@@ -42,7 +42,10 @@
         "name": "Estimated electricity import usage cost month to date"
       },
       "electricity_export_month_to_date_credit": {
-        "name": "Estimated electricity export value month to date"
+        "name": "Estimated electricity export credit month to date"
+      },
+      "electricity_export_month_to_date_market_value": {
+        "name": "Estimated electricity export market value month to date"
       },
       "electricity_import_year_to_date": {
         "name": "Electricity import year to date"
@@ -54,7 +57,10 @@
         "name": "Electricity export year to date"
       },
       "electricity_export_year_to_date_credit": {
-        "name": "Estimated electricity export value year to date"
+        "name": "Estimated electricity export credit year to date"
+      },
+      "electricity_export_year_to_date_market_value": {
+        "name": "Estimated electricity export market value year to date"
       },
       "electricity_month_to_date_fixed_cost": {
         "name": "Estimated electricity fixed charges month to date"
@@ -93,7 +99,7 @@
         "name": "Current electricity price"
       },
             "export_cost": {
-                "name": "Estimated electricity export value month to date (legacy alias)"
+                "name": "Estimated electricity export credit month to date (legacy alias)"
             },
             "export_usage": {
                 "name": "Monthly export usage"

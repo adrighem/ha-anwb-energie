@@ -42,7 +42,10 @@
         "name": "Geschatte verbruikskosten voor elektriciteitsimport maand tot nu toe"
       },
       "electricity_export_month_to_date_credit": {
-        "name": "Geschatte waarde van elektriciteitsexport maand tot nu toe"
+        "name": "Geschatte terugleververgoeding elektriciteit maand tot nu toe"
+      },
+      "electricity_export_month_to_date_market_value": {
+        "name": "Geschatte marktwaarde teruglevering elektriciteit maand tot nu toe"
       },
       "electricity_import_year_to_date": {
         "name": "Elektriciteitsimport jaar tot nu toe"
@@ -54,7 +57,10 @@
         "name": "Elektriciteitsexport jaar tot nu toe"
       },
       "electricity_export_year_to_date_credit": {
-        "name": "Geschatte waarde van elektriciteitsexport jaar tot nu toe"
+        "name": "Geschatte terugleververgoeding elektriciteit jaar tot nu toe"
+      },
+      "electricity_export_year_to_date_market_value": {
+        "name": "Geschatte marktwaarde teruglevering elektriciteit jaar tot nu toe"
       },
       "electricity_month_to_date_fixed_cost": {
         "name": "Geschatte vaste lasten voor elektriciteit maand tot nu toe"
@@ -99,7 +105,7 @@
         "name": "Geschatte verbruikskosten voor elektriciteitsimport maand tot nu toe (verouderde alias)"
       },
       "export_cost": {
-        "name": "Geschatte waarde van elektriciteitsexport maand tot nu toe (verouderde alias)"
+        "name": "Geschatte terugleververgoeding elektriciteit maand tot nu toe (verouderde alias)"
       },
       "yearly_import_usage": {
         "name": "Jaarlijks importverbruik"

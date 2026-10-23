@@ -1,6 +1,7 @@
 # ruff: noqa: E402, E501
 """Test the ANWB Energie Account sensors."""
 
+import math
 import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -136,6 +137,7 @@ sys.modules[
 
 # Now import sensor
 from custom_components.anwb_energie_account.sensor import (
+    COST_ESTIMATE_SENSOR_KEYS,
     GAS_SENSOR_KEYS,
     LEGACY_SENSOR_KEYS,
     MONTHLY_MONETARY_SENSOR_KEYS,
@@ -452,6 +454,8 @@ async def test_clean_install_exposes_only_distinct_supported_entities():
         "electricity_import_year_to_date_cost",
         "electricity_export_year_to_date",
         "electricity_export_year_to_date_credit",
+        "electricity_export_month_to_date_market_value",
+        "electricity_export_year_to_date_market_value",
         "electricity_current_price",
         "electricity_market_price",
         "gas_month_to_date",
@@ -477,6 +481,8 @@ async def test_clean_install_without_gas_does_not_expose_gas_entities():
         "electricity_import_year_to_date_cost",
         "electricity_export_year_to_date",
         "electricity_export_year_to_date_credit",
+        "electricity_export_month_to_date_market_value",
+        "electricity_export_year_to_date_market_value",
         "electricity_current_price",
         "electricity_market_price",
     }
@@ -1151,3 +1157,134 @@ def test_electricity_cost_sensors_expose_kraken_cost_source():
     gas = attributes("gas_year_to_date_cost")
     assert "cost_source" not in gas
     assert gas["calculation_method"] == "daily_closed_months_hourly_current_month"
+
+
+@pytest.mark.parametrize(
+    ("key", "period"),
+    [
+        ("electricity_export_month_to_date_market_value", "month"),
+        ("electricity_export_year_to_date_market_value", "year"),
+    ],
+)
+def test_export_market_value_sensors_match_credit_sensors(key, period):
+    """Market value sensors are monetary totals like the credit sensors."""
+    description = next(desc for desc in SENSOR_TYPES if desc.key == key)
+    credit = next(
+        desc
+        for desc in SENSOR_TYPES
+        if desc.key == f"electricity_export_{period}_to_date_credit"
+    )
+
+    assert description.translation_key == key
+    assert description.device_class == credit.device_class
+    assert description.native_unit_of_measurement == (
+        credit.native_unit_of_measurement
+    )
+    assert description.state_class == credit.state_class
+    assert key not in LEGACY_SENSOR_KEYS
+
+
+@pytest.mark.parametrize(
+    ("key", "breakdown_key"),
+    [
+        (
+            "electricity_export_month_to_date_credit",
+            "electricity_export_month_to_date_credit_breakdown",
+        ),
+        (
+            "electricity_export_year_to_date_credit",
+            "electricity_export_year_to_date_credit_breakdown",
+        ),
+    ],
+)
+def test_export_credit_sensors_expose_breakdown(key, breakdown_key):
+    """Credit sensors split the booked credit under distinct attribute names."""
+    breakdown = {
+        "booked_market_value": 1.5,
+        "booked_net_metering_refund": 4.25,
+        "booked_other": 0.75,
+        "unbooked_kwh": 2.5,
+        "unbooked_credit": 0.5,
+    }
+    coordinator = MagicMock()
+    coordinator.data = {
+        "account_number": "12345",
+        "electricity_cost_source": "kraken_statistics",
+        "export_price_basis": "all_in",
+        key: 7.0,
+        breakdown_key: breakdown,
+    }
+    description = next(desc for desc in SENSOR_TYPES if desc.key == key)
+    sensor = ANWBEnergieAccountSensor(coordinator, description)
+
+    attributes = sensor.extra_state_attributes
+
+    assert {name: attributes[name] for name in breakdown} == breakdown
+    assert sum(
+        attributes[name] for name in breakdown if name != "unbooked_kwh"
+    ) == pytest.approx(sensor.native_value)
+    assert attributes["cost_source"] == "kraken_statistics"
+    assert attributes["export_price_basis"] == "all_in"
+
+    # Calculated or unavailable credits carry no breakdown at all.
+    coordinator.data[breakdown_key] = None
+    assert not set(breakdown) & set(sensor.extra_state_attributes)
+
+
+def test_native_value_has_no_negative_zero():
+    """A value that rounds to zero is reported as 0.0, never -0.0."""
+    coordinator = MagicMock()
+    coordinator.data = {
+        "account_number": "12345",
+        "electricity_export_month_to_date_market_value": -0.001,
+    }
+    description = next(
+        desc
+        for desc in SENSOR_TYPES
+        if desc.key == "electricity_export_month_to_date_market_value"
+    )
+
+    value = ANWBEnergieAccountSensor(coordinator, description).native_value
+
+    assert value == 0.0
+    assert math.copysign(1.0, value) == 1.0
+
+
+@pytest.mark.parametrize(
+    ("key", "value_key", "coverage_key"),
+    [
+        (
+            "electricity_export_month_to_date_market_value",
+            "electricity_export_month_to_date_market_value",
+            "electricity_export_market_value_tariff_coverage",
+        ),
+        (
+            "electricity_export_year_to_date_market_value",
+            "electricity_export_year_to_date_market_value",
+            "electricity_export_year_to_date_market_value_tariff_coverage",
+        ),
+    ],
+)
+def test_export_market_value_sensor_state_and_attributes(key, value_key, coverage_key):
+    """The market value sensor reports its own coverage and goes unavailable."""
+    coordinator = MagicMock()
+    coordinator.data = {
+        "account_number": "12345",
+        "electricity_cost_source": "calculated",
+        value_key: 1.234,
+        coverage_key: {"complete": True},
+    }
+    description = next(desc for desc in SENSOR_TYPES if desc.key == key)
+    sensor = ANWBEnergieAccountSensor(coordinator, description)
+
+    assert sensor.native_value == 1.23
+    assert sensor.extra_state_attributes == {
+        "estimated": True,
+        "cost_source": "calculated",
+        "tariff_coverage": {"complete": True},
+    }
+
+    coordinator.data[value_key] = None
+    assert sensor.native_value is None
+    assert key in COST_ESTIMATE_SENSOR_KEYS
+    assert key in MONTHLY_MONETARY_SENSOR_KEYS | YEARLY_MONETARY_SENSOR_KEYS
