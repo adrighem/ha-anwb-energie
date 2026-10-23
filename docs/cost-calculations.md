@@ -16,8 +16,9 @@ uses as well. Each day lists its cost lines in euro cents including VAT:
 
 - `CONSUMPTION_COST` lines are variable costs: market price, purchasing costs
   and energy tax for import, and the export value for generation. Under net
-  metering, the energy-tax and purchasing refunds on generation cover only the
-  netted kWh. Kraken nets per month; the annual settlement nets per year.
+  metering (saldering), Kraken also books an energy-tax and purchasing refund
+  on generation. Observed refund kWh equalled the month's import, not the
+  smaller of import and export (see `docs/api-observations.md`).
 - `STANDING_CHARGE_COST` lines are the daily fixed delivery charge, grid fee
   and energy-tax reduction.
 
@@ -30,6 +31,52 @@ statistics of the same year are reused, or the calculation below is used.
 
 The `cost_source` attribute shows `kraken_statistics` or `calculated`. Gas
 always uses the calculation below.
+
+## Export credit, market value and dashboard statistic
+
+Three different export numbers exist. They answer different questions and are
+not expected to match.
+
+- Estimated electricity export credit (month or year to date): what ANWB books
+  for export. With Kraken statistics it is the market value plus the
+  net-metering refund, plus days not yet booked at the all-in price. Without
+  Kraken it is the calculated value. Attributes: `cost_source`,
+  `export_price_basis` and, only when booked from Kraken and available,
+  `booked_market_value`, `booked_net_metering_refund`, `booked_other`,
+  `unbooked_kwh` and `unbooked_credit`. The four euro attributes add up to
+  the state within rounding. A booked component is unknown (`null`) when
+  Kraken does not split it.
+- `export_price_basis` tells how calculated and not yet booked kWh are
+  priced: `all_in` before 1 January 2027, `market` from then on.
+- Estimated electricity export market value (month or year to date): only the
+  market part. With Kraken it is the booked
+  `GENERATION_SUPPLIER_DYNAMIC_COST` plus not yet booked kWh at the hourly
+  market price. Without Kraken it is export kWh times the hourly market price
+  for the current month and times the daily average market price for closed
+  months. That year-to-date value may overstate the market value, because
+  solar export peaks in hours with low prices. When a Kraken export day has
+  variable costs but no `GENERATION_SUPPLIER_DYNAMIC_COST` line, or Kraken
+  rejects the `label` field, the market value of the affected period is
+  unavailable while the credit stays available.
+- Energy Dashboard export cost statistic: hourly export kWh times the all-in
+  price. It is unchanged and differs from the credit sensor by design,
+  potentially by a lot before 2027, because the provider's refund follows
+  import kWh and is booked per month.
+
+Synthetic example for one month with 100 kWh import and 40 kWh export, a
+0.05 EUR/kWh average market price, a 0.20 EUR/kWh all-in price and a 0.13
+EUR/kWh refund rate:
+
+| Number | Calculation | Result |
+| --- | --- | --- |
+| Market value | 40 x 0.05 | EUR 2.00 |
+| Net-metering refund | 100 x 0.13 (refund kWh = import) | EUR 13.00 |
+| Export credit | 2.00 + 13.00 | EUR 15.00 |
+| Dashboard export cost | 40 x 0.20 | EUR 8.00 |
+
+A credit far above any per-kWh price (for example EUR 9.07 for 2.55 kWh in
+issue #29) is real provider accounting: the refund is tied to import kWh, not
+to the few exported kWh.
 
 ## What the integration calculates
 
@@ -71,8 +118,8 @@ The English display names of the clean-install entities are:
 
 | Period | Electricity import | Electricity export | Gas |
 | --- | --- | --- | --- |
-| Month to date | `Estimated electricity import usage cost month to date` | `Estimated electricity export value month to date` | `Estimated gas usage cost month to date` |
-| Year to date | `Estimated electricity import usage cost year to date` | `Estimated electricity export value year to date` | `Estimated gas usage cost year to date` |
+| Month to date | `Estimated electricity import usage cost month to date` | `Estimated electricity export credit month to date` | `Estimated gas usage cost month to date` |
+| Year to date | `Estimated electricity import usage cost year to date` | `Estimated electricity export credit year to date` | `Estimated gas usage cost year to date` |
 
 Home Assistant may localize the generated `sensor.*` entity IDs. Find the exact
 IDs for your installation under **Settings → Devices & services → Entities**
@@ -296,8 +343,12 @@ State template:
 - Zero and negative tariffs are valid.
 - Calculated export value uses the electricity all-in tariff until 2027. Under
   annual saldering it is not the final compensation on the provider's annual
-  settlement. Provider statistics net per month, which is closer but still not
-  the annual settlement.
+  settlement. Provider statistics book the net-metering refund per month
+  against import kWh, which is closer to what ANWB shows but may still change
+  in the annual settlement. Accounts with yearly import above export are
+  unverified.
+- The export credit and the Energy Dashboard export cost differ by design, see
+  above.
 - Do not clamp a negative export value to zero. Subtracting a negative value
   correctly increases the estimated net electricity cost.
 - Persisted `DAY` tariffs make the completed-month part of a year-to-date value

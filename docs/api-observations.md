@@ -113,11 +113,42 @@ Observed behavior:
   `GRID_FEE` and `ENERGY_TAX_REDUCTION` (type `STANDING_CHARGE_COST`).
 - Generation labels: `GENERATION_SUPPLIER_DYNAMIC_COST` over all exported kWh,
   and `GENERATION_ENERGY_TAX_STEP_1` and `GENERATION_SUPPLIER_PURCHASING_COST`
-  over the netted kWh only, all negative.
+  as the net-metering refund, all negative. The first reading that the refund
+  covers only netted kWh was wrong, see the 2026-10-23 section.
 - Daily statistics summed per month equal the `MONTH_INTERVAL` statistics, and
   daily usage equals the account-cache `MONTH` usage for closed months.
-- Kraken nets per month: the netted kWh is the smaller of that month's import
-  and export.
+- Superseded by the 2026-10-23 section: "Kraken nets per month: the netted kWh
+  is the smaller of that month's import and export." This was based on a
+  single summer month of one account and does not hold.
+
+## 2026-10-23 Kraken Export Credit And Refund Booking
+
+Re-verified live on one account over several months (issue
+[#29](https://github.com/adrighem/ha-anwb-energie/issues/29)):
+
+- `DAY_INTERVAL` statistics accept the per-statistic fields `label` and
+  `value` (kWh). Requesting `unit` is rejected with HTTP 400.
+- `GENERATION_SUPPLIER_DYNAMIC_COST` is the market value of the exported kWh;
+  its `value` equals the export kWh.
+- `GENERATION_ENERGY_TAX_STEP_1` and `GENERATION_SUPPLIER_PURCHASING_COST` are
+  the net-metering refund. Their `value` kWh equalled that month's import in
+  every month checked, including months where export was far below import.
+  The rate was about EUR 0.12885/kWh including VAT in 2026. The refund mirrors
+  the import energy-tax and purchasing lines.
+- Inference, not verified: netting is provisionally booked against all import
+  when the yearly export exceeds the yearly import. Accounts with yearly
+  import above export are unverified.
+- The earlier rule "Kraken limits the refund to netted kWh, the smaller of
+  import and export per month" is superseded and wrong.
+- Account-cache cost fields: only `HOUR` rows carry them. `DAY` and `MONTH`
+  rows show zero. A full-month `HOUR` request returns no future rows.
+- Consequence: a month's Kraken export credit per exported kWh can be far above
+  any price (issue #29 reported EUR 9.07 for 2.55 kWh). This is real provider
+  accounting, not a calculation error.
+- The integration selects only `label`. If Kraken rejects it (HTTP 400 or a
+  GraphQL validation error), the integration retries once without `label`,
+  keeps the costs and credit, and reports the export market value as unknown
+  until it reloads.
 
 ## 2026-07-23 Historical Tariff Ranges
 
@@ -265,7 +296,7 @@ and listed by name in `rejected_statistic_fields`. The
 report `.anwb-api-probe/kraken-statistics.json` (mode `0600`) holds per-day
 statistics, per-month totals per direction and label, and a
 `netting_comparison` with monthly and cumulative (per calendar year)
-import, export and `min(import, export)` kWh next to the generation label kWh.
+import, export and `min(import, export)` candidate kWh next to the generation label kWh.
 `refund_kwh` is the kWh on the `GENERATION_ENERGY_TAX_STEP_1` line and
 `refund_basis` names the first candidate it matches (`import`, `export`,
 `monthly_min`, `cumulative_min_delta`, or `other`).

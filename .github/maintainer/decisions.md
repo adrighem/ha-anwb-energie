@@ -99,5 +99,9 @@ state of the existing export sensors, renamed "Estimated electricity export
 credit month/year to date" with unchanged `unique_id`. Add new sensors
 "Estimated electricity export market value month/year to date" from Kraken
 `GENERATION_SUPPLIER_DYNAMIC_COST` lines plus a market-priced tail. Expose
-`net_metering_refund`, `other`, `cost_source`, `tail_kwh` on the credit
-sensors and fix `export_price_basis`.
+`booked_market_value`, `booked_net_metering_refund`, `booked_other`,
+`unbooked_kwh`, `unbooked_credit` and `cost_source` on the credit sensors,
+only when booked from Kraken; the euro attributes add up to the state. Keep
+`export_price_basis` as `all_in` or `market` for calculated and unbooked kWh.
+A missing market line or a schema that rejects `label` makes the market value
+unknown, never zero, and leaves the credit unchanged.
