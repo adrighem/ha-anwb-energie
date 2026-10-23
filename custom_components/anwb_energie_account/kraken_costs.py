@@ -1,6 +1,7 @@
 """Provider-calculated electricity costs from Kraken measurement statistics.
 
-The ANWB account-cache endpoints return zero for their cost fields, but Kraken's
+The ANWB account-cache cost fields are populated when a row has
+``hasGap: false``; zero was observed on rows with ``hasGap: true``. Kraken's
 ``measurements`` query returns the amounts the ANWB app shows when it is asked
 for ``DAY_INTERVAL`` readings. Each day carries one statistic per cost line in
 euro cents including VAT:
@@ -141,6 +142,28 @@ def _finite(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return number if math.isfinite(number) else None
+
+
+def sum_account_cache_fixed_costs(rows: Iterable[Mapping[str, Any]]) -> float | None:
+    """Sum ``vasteKosten.total`` over account-cache HOUR rows.
+
+    Return None when any row has a gap or lacks a numeric total, or when there
+    are no rows, so the caller falls back to its constants for the whole period.
+    """
+    total = 0.0
+    seen = False
+    for row in rows:
+        if row.get("hasGap") is True:
+            return None
+        fixed = row.get("vasteKosten")
+        value = fixed.get("total") if isinstance(fixed, Mapping) else None
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        if not math.isfinite(value):
+            return None
+        total += value
+        seen = True
+    return total if seen else None
 
 
 def _graphql_error_message(payload: Mapping[str, Any]) -> str | None:

@@ -28,8 +28,9 @@ Observed behavior:
   HTTP 200 with an empty `data` array.
 - Electricity and production cache rows included `variabeleKosten` and
   `vasteKosten`.
-- Those cost objects were all zero in sampled `HOUR` and `MONTH` rows, including
-  rows/months with non-zero usage.
+- In the 2026-06-15 probe those cost objects were all zero in sampled `HOUR` and
+  `MONTH` rows, including rows/months with non-zero usage (see the 2026-10
+  update below: populated when `hasGap` is false).
 - `hasGap` was true for sampled non-zero usage rows, so it is not a sufficient
   reason to discard a row.
 - Public tariff endpoints returned non-zero prices for the same electricity and
@@ -42,7 +43,8 @@ Follow-up probe on 2026-06-17:
 - Checked `DAY` and `MONTH` for the previous calendar month.
 - Checked `MONTH` for closed months in the current year.
 - Checked `MONTH` for the previous calendar year.
-- All probed `variabeleKosten.total` and `vasteKosten.total` values were zero.
+- All probed `variabeleKosten.total` and `vasteKosten.total` values were zero
+  (all sampled rows had `hasGap: true`).
 - This included non-zero usage windows such as:
   - last-week electricity `HOUR`: `0.557 kWh`, tariff-derived cost `0.14456302 EUR`
   - last-week production `HOUR`: `7.81 kWh`, tariff-derived value `1.93535431 EUR`
@@ -60,17 +62,36 @@ Design implication:
   export, and gas quantities.
 - Continue using the public tariff endpoints as the source for variable cost
   calculations.
-- Do not use `variabeleKosten.total` or `vasteKosten.total` for cost entities
-  unless future authenticated verification shows non-zero values with understood
-  units and accounting semantics.
+- As of 2026-06, `variabeleKosten.total` was not used for cost entities because
+  every probed value was zero. The 2026-10 update below shows it can be
+  populated; it remains out of scope as a cost source.
 - If cost entities are redesigned, document whether they are tariff-estimated
-  values or provider-billed values. The currently verified cache cost fields do
-  not support provider-billed cost entities.
+  values or provider-billed values.
+
+### 2026-10 Update: populated when `hasGap` is false (issue #30)
+
+An account owner reported (issue #30) that every `HOUR` row from
+`/v1/accounts/{account}/{electricity,gas,production}/cache` for 13 to 16 October
+2026 had `hasGap: false`, and that electricity and gas rows carried non-zero
+`variabeleKosten` and `vasteKosten` every hour, including VAT.
+
+- Cost fields are populated when `hasGap` is false. Zero was observed when
+  `hasGap` is true (2026-06 probes), and on limited accounts.
+- `vasteKosten.total` is the hour's share of the fixed costs: delivery fee per
+  month divided by days in month and 24, grid fee and energy-tax reduction per
+  year divided by 365 and 24. The energy-tax reduction appears on electricity
+  rows only.
+- `DAY` rows were reported as the sum of that day's `HOUR` rows.
+- The integration sums `vasteKosten.total` over all `HOUR` rows of the
+  month-to-date fetch for the `account_cache` fixed-cost source. If any row has
+  `hasGap: true` or lacks a numeric total, it uses its hardcoded constants for
+  the whole month. Reading only the first row, as before, yielded one hour.
 
 ## 2026-10-02 Kraken Measurement Cost Statistics
 
 The account-cache cost objects above stayed zero for a verified account with
-`hasGap: true` rows. The amounts the ANWB app shows come from Kraken GraphQL:
+`hasGap: true` rows (they are populated when `hasGap` is false, see the 2026-10
+update). The amounts the ANWB app shows come from Kraken GraphQL:
 `account.properties.measurements` with `utilityFilters` on
 `electricityFilters.readingFrequencyType` and `readingDirection`
 (`CONSUMPTION` or `GENERATION`), selecting `metaData.statistics`.
@@ -234,4 +255,5 @@ Interpretation:
 - Non-zero cost fields only when `hasGap` is false would support a gap-gated
   theory.
 - Zero cost fields across yesterday, last week, previous month, and closed
-  monthly rows supports continuing to treat cache cost fields as non-authoritative.
+  monthly rows with `hasGap: true` was observed in 2026-06. The 2026-10 update
+  (issue #30) confirmed the gap-gated reading: populated when `hasGap` is false.

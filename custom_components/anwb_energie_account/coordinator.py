@@ -52,6 +52,7 @@ from .kraken_costs import (
     KrakenElectricityCosts,
     build_electricity_costs,
     parse_daily_costs_page,
+    sum_account_cache_fixed_costs,
     usage_matches,
 )
 from .tariff_cache import (
@@ -2049,18 +2050,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
             }
             gas_month_data_available = False
 
-        api_vaste_kosten = 0.0
-        if import_data:
-            vk = import_data[0].get("vasteKosten")
-            if isinstance(vk, dict):
-                api_vaste_kosten = sum(
-                    _numeric_tariff_value(vk.get(key)) or 0.0
-                    for key in (
-                        "abonnementsKosten",
-                        "netbeheerKosten",
-                        "verminderingEnergieBelasting",
-                    )
-                )
+        api_vaste_kosten = sum_account_cache_fixed_costs(import_data) or 0.0
 
         if now.month == 1:
             yearly_import_usage = import_usage
@@ -2134,18 +2124,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
                 yearly_export_cost = None
                 yearly_export_tariff_coverage = export_tariff_coverage
 
-        api_vaste_kosten_gas = 0.0
-        if gas_data:
-            vk = gas_data[0].get("vasteKosten")
-            if isinstance(vk, dict):
-                api_vaste_kosten_gas = sum(
-                    _numeric_tariff_value(vk.get(key)) or 0.0
-                    for key in (
-                        "abonnementsKosten",
-                        "netbeheerKosten",
-                        "verminderingEnergieBelasting",
-                    )
-                )
+        api_vaste_kosten_gas = sum_account_cache_fixed_costs(gas_data) or 0.0
 
         if not has_gas:
             yearly_gas_usage = 0.0

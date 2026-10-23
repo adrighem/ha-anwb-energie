@@ -764,10 +764,8 @@ async def test_update_data_with_gas(auth_mock):
                         {
                             "startDate": "2026-04-20T12:00:00.000Z",
                             "usage": 1.5,
-                            "vasteKosten": {
-                                "abonnementsKosten": 2.0,
-                                "netbeheerKosten": 1.0,
-                            },
+                            "hasGap": False,
+                            "vasteKosten": {"total": 3.0},
                         }
                     ]
                 }
@@ -797,7 +795,8 @@ async def test_update_data_with_gas(auth_mock):
                         {
                             "startDate": "2026-04-20T12:00:00.000Z",
                             "usage": 2.5,
-                            "vasteKosten": {"abonnementsKosten": 3.0},
+                            "hasGap": False,
+                        "vasteKosten": {"total": 3.0},
                         }
                     ]
                 }
@@ -864,6 +863,81 @@ async def test_update_data_with_gas(auth_mock):
         assert result["gas_fixed_cost_source"] == "account_cache"
         assert result["monthly_period_start"] == "2026-04-01T00:00:00+00:00"
         assert result["yearly_period_start"] == "2026-01-01T00:00:00+00:00"
+
+
+async def _fixed_cost_result(auth_mock, import_rows, gas_rows):
+    """Run one coordinator update with the given electricity and gas HOUR rows."""
+    coordinator = ANWBConsumptionCoordinator(MagicMock(), auth_mock, MagicMock())
+    coordinator._kraken_token = "mock_kraken_token"
+    coordinator._account_number = "12345"
+    coordinator._account_address = "Mock Address"
+
+    import custom_components.anwb_energie_account.coordinator as coord_mod
+
+    mock_now = datetime.datetime(2026, 4, 20, 12, 0, 0)
+    month_row = [{"startDate": "2026-04-01T00:00:00.000Z", "usage": 1.0}]
+
+    async def fetch(url, token):
+        if "tarieven/electricity" in url or "tarieven/gas" in url:
+            return {
+                "data": [
+                    {
+                        "date": "2026-04-20T12:00:00.000Z",
+                        "values": {"allInPrijs": 20.0},
+                    }
+                ]
+            }
+        if "interval=HOUR" in url:
+            if "gas/cache" in url:
+                return {"data": gas_rows}
+            if "electricity/cache" in url:
+                return {"data": import_rows}
+            return {"data": [{"startDate": "2026-04-20T12:00:00.000Z", "usage": 0.5}]}
+        return {"data": month_row}
+
+    with (
+        patch.object(coord_mod.dt_util, "utcnow", return_value=mock_now),
+        patch.object(coord_mod.dt_util, "as_local", side_effect=lambda value: value),
+        patch.object(coordinator, "_async_fetch_data", side_effect=fetch),
+        patch.object(coordinator, "_insert_statistics", new_callable=AsyncMock),
+    ):
+        return await coordinator._async_update_data_internal()
+
+
+def _hour_rows(count, total):
+    return [
+        {
+            "startDate": f"2026-04-20T{hour:02d}:00:00.000Z",
+            "usage": 1.0,
+            "hasGap": False,
+            "vasteKosten": {"total": total},
+        }
+        for hour in range(count)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_account_cache_fixed_costs_sum_all_hour_rows(auth_mock):
+    """Month-to-date fixed charges sum every HOUR row, not just the first."""
+    result = await _fixed_cost_result(
+        auth_mock, _hour_rows(10, 0.5), _hour_rows(10, 0.25)
+    )
+
+    assert result["electricity_fixed_cost_source"] == "account_cache"
+    assert result["gas_fixed_cost_source"] == "account_cache"
+    assert result["gas_month_to_date_fixed_cost"] == pytest.approx(2.5)
+    assert result["electricity_month_to_date_fixed_cost"] == pytest.approx(5.0)
+
+
+@pytest.mark.asyncio
+async def test_account_cache_fixed_costs_gap_uses_fallback(auth_mock):
+    """Any gap row sends the whole month to the hardcoded constants."""
+    gap_rows = _hour_rows(10, 0.5)
+    gap_rows[4]["hasGap"] = True
+    result = await _fixed_cost_result(auth_mock, gap_rows, list(gap_rows))
+
+    assert result["electricity_fixed_cost_source"] == "hardcoded_fallback"
+    assert result["gas_fixed_cost_source"] == "hardcoded_fallback"
 
 
 @pytest.mark.asyncio
@@ -1392,7 +1466,8 @@ async def test_year_to_date_costs_combine_closed_days_with_current_hours(auth_mo
                     {
                         "startDate": "2026-04-20T10:00:00.000Z",
                         "usage": 3.0,
-                        "vasteKosten": {"abonnementsKosten": 3.0},
+                        "hasGap": False,
+                        "vasteKosten": {"total": 3.0},
                     }
                 ]
             }
@@ -1912,7 +1987,8 @@ async def test_january_gas_year_cost_uses_hourly_data_when_day_cache_fails(auth_
                     {
                         "startDate": "2026-01-20T10:00:00.000Z",
                         "usage": 2.0,
-                        "vasteKosten": {"abonnementsKosten": 3.0},
+                        "hasGap": False,
+                        "vasteKosten": {"total": 3.0},
                     }
                 ]
             }

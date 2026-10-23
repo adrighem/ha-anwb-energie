@@ -67,6 +67,12 @@ field without an official definition or stronger observations.
 Evidence: authenticated observations, ANWB's missing-meter-data explanation,
 the mobile bundle inspection, and the resolution of ISSUE:17.
 
+Exception (2026-10-23): `hasGap: true` marks that row's cost fields as
+untrusted. If any HOUR row in the period has a gap, the fixed-charge sum falls
+back to the hardcoded constants for the whole period. `hasGap` stays advisory
+for usage. Evidence: ISSUE:30 (populated costs on `hasGap: false` rows) and the
+2026-06 probes (zero costs on `hasGap: true` rows).
+
 ## 2026-10-23: Chunked DAY tariff requests
 
 Merged PR:31 (fixes ISSUE:28). DAY tariff requests stay at most 190 labels per

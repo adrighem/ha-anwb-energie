@@ -260,3 +260,38 @@ def test_build_costs_on_new_years_day_without_data():
     assert costs.covered_through is None
     assert costs.year_import.days == 0
     assert costs.month_export.variable_cost == 0.0
+
+
+def _row(total, **extra):
+    return {"hasGap": False, "vasteKosten": {"total": total}, **extra}
+
+
+def test_sum_account_cache_fixed_costs_sums_all_rows():
+    rows = [_row(0.5), _row(0.25), _row(-0.1)]
+
+    assert kraken_costs.sum_account_cache_fixed_costs(rows) == pytest.approx(0.65)
+
+
+def test_sum_account_cache_fixed_costs_gap_returns_none():
+    rows = [_row(0.5), _row(0.5, hasGap=True)]
+
+    assert kraken_costs.sum_account_cache_fixed_costs(rows) is None
+
+
+@pytest.mark.parametrize(
+    "bad_row",
+    [
+        {"hasGap": False},
+        {"hasGap": False, "vasteKosten": None},
+        {"hasGap": False, "vasteKosten": {}},
+        {"hasGap": False, "vasteKosten": {"total": "0.5"}},
+        {"hasGap": False, "vasteKosten": {"total": True}},
+        {"hasGap": False, "vasteKosten": {"total": float("nan")}},
+    ],
+)
+def test_sum_account_cache_fixed_costs_missing_or_invalid_returns_none(bad_row):
+    assert kraken_costs.sum_account_cache_fixed_costs([_row(0.5), bad_row]) is None
+
+
+def test_sum_account_cache_fixed_costs_empty_returns_none():
+    assert kraken_costs.sum_account_cache_fixed_costs([]) is None

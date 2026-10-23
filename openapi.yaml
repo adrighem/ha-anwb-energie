@@ -39,9 +39,10 @@ x-anwb-verification:
     - Authenticated account cache responses include interval, unit, startDate, endDate, hasGap, usage, vasteKosten, and variabeleKosten.
     - Authenticated account cache HOUR and MONTH responses observed unit values kWh for electricity/production and m3 for gas.
     - Authenticated electricity/production cache rows observed non-zero usage with hasGap true; hasGap should not be treated as "ignore this row" without further evidence.
-    - Authenticated electricity/production cache rows observed on 2026-06-15 returned variabeleKosten and vasteKosten fields, but all cost components were zero for both HOUR and MONTH rows, including rows/months with material non-zero usage. Tariff endpoints produced non-zero cost calculations for the same hours.
+    - Authenticated electricity/production cache rows observed on 2026-06-15 returned variabeleKosten and vasteKosten fields, but all cost components were zero for both HOUR and MONTH rows (hasGap true), including rows/months with material non-zero usage. Tariff endpoints produced non-zero cost calculations for the same hours.
     - Follow-up authenticated probe on 2026-06-17 checked yesterday, last week, previous month, closed current-year months, and previous calendar-year rows across HOUR, DAY, and MONTH intervals where supported. All variabeleKosten.total and vasteKosten.total values were zero, including non-zero electricity/production usage windows. This argues against simple delayed backfill or DAY/MONTH-only population for the verified account.
-    - Do not treat cache cost fields as authoritative billing values without re-verifying non-zero values and their unit/accounting semantics.
+    - Observed 2026-10 (issue #30): cost fields are populated when hasGap is false (electricity and gas HOUR rows carried non-zero variabeleKosten and vasteKosten); zero was observed when hasGap is true, and on limited accounts.
+    - Do not treat cache cost fields as authoritative billing values without re-verifying their unit/accounting semantics.
     - Authenticated gas cache returned HTTP 200 with an empty data array for an account without gas.
     - Authenticated legacy bills returned HTTP 200 for the verified account; legacy payments returned HTTP 500.
     - Kraken GraphQL SupplyPointType.readings requires readingType ReadingTypes; observed enum values are INTERVAL, ACCUMULATION, and PEAK.
@@ -330,11 +331,11 @@ components:
     FixedCosts:
       type: object
       description: >
-        Fixed-cost fields returned inside account cache rows. These fields were
-        present during authenticated verification, but observed as zero for HOUR
-        and MONTH electricity/production rows with non-zero usage. Consumers
-        should not rely on these as authoritative billing values unless future
-        verification proves they are populated for the target account/contract.
+        Fixed-cost fields returned inside account cache rows. Populated when
+        hasGap is false (issue #30, 2026-10); zero was observed when hasGap is
+        true and on limited accounts. total is the hour's share of the fixed
+        costs for HOUR rows. The integration sums total over the month-to-date
+        HOUR rows and falls back to constants if any row has a gap.
       additionalProperties: true
       properties:
         abonnementsKosten:
@@ -349,12 +350,12 @@ components:
     VariableCosts:
       type: object
       description: >
-        Variable-cost fields returned inside account cache rows. These fields
-        were present during authenticated verification, but observed as zero for
-        HOUR and MONTH electricity/production rows with non-zero usage. The Home
-        Assistant integration therefore computes variable costs from the public
-        tariff endpoints, using HOUR for the current month and DAY for completed
-        prior months, instead of using variabeleKosten.total.
+        Variable-cost fields returned inside account cache rows. Populated when
+        hasGap is false (issue #30, 2026-10); zero was observed when hasGap is
+        true and on limited accounts. The Home Assistant integration computes
+        variable costs from the public tariff endpoints, using HOUR for the
+        current month and DAY for completed prior months, instead of using
+        variabeleKosten.total.
       additionalProperties: true
       properties:
         dynamischeKosten:
@@ -385,7 +386,8 @@ components:
           description: >
             Gap marker returned by the cache endpoint. Verified rows with
             non-zero usage also had hasGap true, so this should not by itself be
-            interpreted as "discard this sample".
+            interpreted as "discard this sample". Cost fields are populated
+            only when hasGap is false.
         usage:
           type: number
         vasteKosten:
