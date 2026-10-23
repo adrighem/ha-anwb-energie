@@ -16,6 +16,7 @@ import warnings
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from types import ModuleType
 from typing import Any, NoReturn
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -25,6 +26,11 @@ try:
     from zoneinfo import ZoneInfo
 except ImportError:  # pragma: no cover
     ZoneInfo = None
+
+if __package__:
+    from . import anwb_probe_current_month as current_month
+else:  # pragma: no cover - executed as a script from the scripts directory
+    import anwb_probe_current_month as current_month
 
 CLIENT_ID = "57fe1448-00e6-47f2-bb50-c0935640b1fa"
 TENANT_ID = "49acae90-1d8b-46a5-943a-33da44624219"
@@ -40,6 +46,7 @@ PROBE_DIR = Path(".anwb-api-probe")
 STATE_FILE = PROBE_DIR / "state.json"
 TOKEN_FILE = PROBE_DIR / "tokens.json"
 REPORT_FILE = PROBE_DIR / "last-report.json"
+KRAKEN_STATISTICS_FILE = PROBE_DIR / "kraken-statistics.json"
 
 
 @dataclass(frozen=True)
@@ -50,6 +57,10 @@ class ProbeWindow:
     start: date
     end: date
     intervals: tuple[str, ...]
+    # Exact integration query strings (start, end, contractStart) and the
+    # moment they were computed; set only for the current_month window.
+    query_bounds: tuple[str, str, str] | None = None
+    reference_time: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -531,10 +542,27 @@ def _get_account_number(kraken_token: str) -> str:
     return account_number
 
 
-def _local_today() -> date:
+def _local_now() -> datetime:
     if ZoneInfo is not None:
-        return datetime.now(ZoneInfo("Europe/Amsterdam")).date()
-    return datetime.now().astimezone().date()
+        return datetime.now(ZoneInfo("Europe/Amsterdam"))
+    return datetime.now().astimezone()
+
+
+def _local_today() -> date:
+    return _local_now().date()
+
+
+def _current_month_window(now: datetime) -> ProbeWindow:
+    month_start = _month_start(now.date())
+    next_month = (month_start + timedelta(days=32)).replace(day=1)
+    return ProbeWindow(
+        "current_month",
+        month_start,
+        next_month - timedelta(days=1),
+        ("HOUR",),
+        query_bounds=current_month.account_cache_query_boundaries(now),
+        reference_time=now,
+    )
 
 
 def _month_start(value: date) -> date:
@@ -553,7 +581,8 @@ def _previous_year(today: date) -> tuple[date, date]:
 
 
 def _probe_windows(include_previous_year: bool) -> list[ProbeWindow]:
-    today = _local_today()
+    now = _local_now()
+    today = now.date()
     yesterday = today - timedelta(days=1)
     last_week = today - timedelta(days=7)
     previous_month_start, previous_month_end = _previous_month(today)
@@ -572,6 +601,7 @@ def _probe_windows(include_previous_year: bool) -> list[ProbeWindow]:
             previous_month_end,
             ("MONTH",),
         ),
+        _current_month_window(now),
     ]
     if include_previous_year:
         start, end = _previous_year(today)
@@ -586,13 +616,16 @@ def _fetch_cache(
     interval: str,
     window: ProbeWindow,
 ) -> JsonResponse:
-    contract_start = date(window.start.year, 1, 1)
+    if window.query_bounds is not None:
+        start, end, contract_start = window.query_bounds
+    else:
+        start = _date_time_start(window.start)
+        end = _date_time_end(window.end)
+        contract_start = _date_time_start(date(window.start.year, 1, 1))
     url = (
         f"{ACCOUNT_CACHE_BASE}/{account_number}/{endpoint}/cache"
-        f"?startDate={_date_time_start(window.start)}"
-        f"&endDate={_date_time_end(window.end)}"
-        f"&contractStartDate={_date_time_start(contract_start)}"
-        f"&interval={interval}"
+        f"?startDate={start}&endDate={end}"
+        f"&contractStartDate={contract_start}&interval={interval}"
     )
     return _request_json(
         "GET",
@@ -839,7 +872,12 @@ def command_probe(args: argparse.Namespace) -> int:
                     continue
 
                 tariff_map = None
-                if args.tariff_check and interval == "HOUR":
+                # The current month includes future days without tariffs.
+                if (
+                    args.tariff_check
+                    and interval == "HOUR"
+                    and window.query_bounds is None
+                ):
                     key = (tariff_kind, window.start, window.end)
                     if key not in tariff_cache:
                         tariff_cache[key] = _fetch_tariff_map(
@@ -847,16 +885,22 @@ def command_probe(args: argparse.Namespace) -> int:
                         )
                     tariff_map = tariff_cache[key]
 
-                results.append(
-                    _summarize_rows(
-                        endpoint,
-                        interval,
-                        window,
-                        response.status,
-                        response.payload,
-                        tariff_map,
-                    )
+                summary = _summarize_rows(
+                    endpoint,
+                    interval,
+                    window,
+                    response.status,
+                    response.payload,
+                    tariff_map,
                 )
+                if window.query_bounds and window.reference_time:
+                    summary["current_month"] = current_month.summarize_current_month(
+                        response.payload.get("data") or [],
+                        now=window.reference_time,
+                        start=window.query_bounds[0],
+                        end=window.query_bounds[1],
+                    )
+                results.append(summary)
 
     report = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -864,11 +908,7 @@ def command_probe(args: argparse.Namespace) -> int:
         "classification": _classify(results),
         "results": results,
     }
-    _ensure_probe_dir()
-    REPORT_FILE.write_text(
-        json.dumps(report, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
+    _write_secret_json(REPORT_FILE, report)
 
     print(json.dumps(report["classification"], indent=2, sort_keys=True))
     print(f"\nWrote sanitized report to ignored file: {REPORT_FILE}")
@@ -878,13 +918,22 @@ def command_probe(args: argparse.Namespace) -> int:
 
 def command_clear(_: argparse.Namespace) -> int:
     """Remove local probe secrets and report files."""
-    for path in (STATE_FILE, TOKEN_FILE, REPORT_FILE):
+    for path in (STATE_FILE, TOKEN_FILE, REPORT_FILE, KRAKEN_STATISTICS_FILE):
         try:
             path.unlink()
             print(f"Removed {path}")
         except FileNotFoundError:
             pass
     return 0
+
+
+def _kraken_module() -> ModuleType:
+    # Imported lazily: the Kraken module imports this module's shared helpers.
+    if __package__:
+        from . import anwb_probe_kraken
+    else:  # pragma: no cover - executed as a script from the scripts directory
+        import anwb_probe_kraken
+    return anwb_probe_kraken
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -923,6 +972,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     probe.set_defaults(func=command_probe, tariff_check=True)
 
+    _kraken_module().register(subparsers)
+
     clear = subparsers.add_parser("clear", help="Delete local probe files")
     clear.set_defaults(func=command_clear)
 
@@ -947,4 +998,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    # Let companion modules import this script by name and share its state and
+    # ProbeError class instead of loading a second copy.
+    sys.modules.setdefault("anwb_api_probe", sys.modules[__name__])
     raise SystemExit(main())

@@ -241,7 +241,36 @@ To include previous calendar-year monthly rows:
 python scripts/anwb_api_probe.py probe --previous-year
 ```
 
-The report is written to `.anwb-api-probe/last-report.json`. It contains only
+Every `probe` run also includes a `current_month` window. It sends the exact
+full-month `HOUR` requests the integration sends (local month start through
+month end, including future hours, with the same UTC boundary strings) for
+electricity, production and gas. Each result gets a `current_month` section with
+`rows_after_now`, first and last `startDate`, the last `startDate` with usage,
+gap rows with and without usage, capped contiguous `hasGap` ranges, `vasteKosten`
+sums over all rows and over `hasGap: false` rows, and the value the integration's
+`sum_account_cache_fixed_costs` would return (issue #30). Tariff checks are
+skipped for this window.
+
+To fetch Kraken `DAY_INTERVAL` statistics with per-line detail (issue #29):
+
+```bash
+python scripts/anwb_api_probe.py kraken-statistics [--from YYYY-MM-DD] [--to YYYY-MM-DD]
+```
+
+The range defaults to the current year to date. The command reuses cached
+tokens (or `--callback`), queries `CONSUMPTION` and `GENERATION` and also
+selects statistic `label`, `value` and `unit` (the live schema rejected `unit`
+with HTTP 400 in 2026-10). Fields the schema rejects are dropped one at a time
+and listed by name in `rejected_statistic_fields`. The
+report `.anwb-api-probe/kraken-statistics.json` (mode `0600`) holds per-day
+statistics, per-month totals per direction and label, and a
+`netting_comparison` with monthly and cumulative (per calendar year)
+import, export and `min(import, export)` kWh next to the generation label kWh.
+`refund_kwh` is the kWh on the `GENERATION_ENERGY_TAX_STEP_1` line and
+`refund_basis` names the first candidate it matches (`import`, `export`,
+`monthly_min`, `cumulative_min_delta`, or `other`).
+
+The report is written to `.anwb-api-probe/last-report.json` (mode `0600`). It contains only
 allowlisted aggregate fields and request status context. Upstream error bodies are
 discarded and are never included in reports or error output. The report also
 intentionally excludes account number, address, and bearer tokens.
