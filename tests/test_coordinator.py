@@ -3,6 +3,7 @@
 
 import importlib
 import sys
+import urllib.parse
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -656,6 +657,79 @@ async def test_non_amsterdam_daily_tariff_range_includes_trailing_provider_day(
     assert "startDate=2026-07-19T00:00:00.000Z" in urls[0]
     assert "endDate=2026-07-21T23:59:59.999Z" in urls[0]
     assert mock_fetch.await_args.args[1] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("commodity", ["electricity", "gas"])
+@pytest.mark.parametrize("timezone_name", ["Europe/Amsterdam", "UTC"])
+async def test_daily_tariffs_fill_long_cold_cache_below_api_price_limit(
+    auth_mock, commodity, timezone_name
+):
+    local_zone = ZoneInfo(timezone_name)
+    provider_zone = ZoneInfo("Europe/Amsterdam")
+    first_day = datetime.date(2026, 1, 1)
+    required = frozenset(
+        first_day + datetime.timedelta(days=offset) for offset in range(273)
+    )
+    cache = coord_mod.TariffCache(
+        None,
+        timezone_name,
+        clock=lambda: datetime.datetime(2026, 10, 1, tzinfo=local_zone),
+    )
+    coordinator = ANWBConsumptionCoordinator(
+        MagicMock(), auth_mock, MagicMock(), tariff_cache=cache
+    )
+    windows = []
+
+    async def fetch(url, token):
+        assert token is None
+        assert f"/tarieven/{commodity}?" in url
+        params = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+        start = datetime.date.fromisoformat(params["startDate"][0][:10])
+        end = datetime.date.fromisoformat(params["endDate"][0][:10])
+        windows.append((start, end))
+        rows = []
+        for offset in range((end - start).days + 1):
+            day = start + datetime.timedelta(days=offset)
+            timestamp = datetime.datetime.combine(
+                day, datetime.time.min, tzinfo=provider_zone
+            ).isoformat()
+            # The first label is empty; prices after the 200th are also null.
+            values = (
+                {"allInPrijs": 25.0, "marktprijs": -5.0}
+                if 0 < offset <= 200
+                else {"allInPrijs": None, "marktprijs": None}
+            )
+            rows.append({"date": timestamp, "values": values})
+        return {"data": rows}
+
+    with (
+        patch.object(coord_mod.dt_util, "DEFAULT_TIME_ZONE", local_zone),
+        patch.object(
+            coord_mod.dt_util,
+            "as_local",
+            side_effect=lambda value: value.astimezone(local_zone),
+        ),
+        patch.object(coordinator, "_async_fetch_data", side_effect=fetch),
+    ):
+        result = await cache.async_get_daily_tariffs(
+            commodity,
+            required,
+            lambda missing: coordinator._async_fetch_daily_tariffs(commodity, missing),
+        )
+        warm = await cache.async_get_daily_tariffs(
+            commodity,
+            required,
+            AsyncMock(side_effect=AssertionError("complete tariffs were refetched")),
+        )
+
+    assert set(result.all_in_prices) == {day.isoformat() for day in required}
+    assert set(result.market_prices) == set(result.all_in_prices)
+    assert set(result.all_in_prices.values()) == {25.0}
+    assert set(result.market_prices.values()) == {-5.0}
+    assert warm == result
+    assert len(windows) == 2
+    assert all((end - start).days + 1 <= 190 for start, end in windows)
 
 
 @pytest.mark.asyncio

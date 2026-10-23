@@ -108,6 +108,14 @@ endpoints with historical multi-day ranges:
 - A January-through-July `interval=DAY` request succeeded for both electricity
   and gas in one request per commodity.
 
+Issue [#28](https://github.com/adrighem/ha-anwb-energie/issues/28) subsequently
+reported a 200-price limit for both `DAY` endpoints: longer responses still
+contain date rows, but prices after the limit are null. The integration splits
+long ranges into sequential windows of at most 190 calendar-day labels,
+including padding. Adjacent windows overlap by two labels to preserve boundary
+coverage. Finite all-in and market prices are merged before entering the cache;
+missing prices remain retryable and do not bypass the strict coverage checks.
+
 The integration therefore keeps ANWB account-cache usage separate from its
 persisted integration-local tariff cache:
 
@@ -145,7 +153,7 @@ This bounds refresh traffic, but the completed-month part remains a daily
 aggregate estimate rather than an hourly usage-weighted calculation.
 
 For an empty cache, the consumption calculation on 31 December needs at most
-31 local-day `HOUR` lookups plus one prior-month `DAY` range per commodity when
+31 local-day `HOUR` lookups plus two prior-month `DAY` requests per commodity when
 every December day has non-zero usage. In the Amsterdam timezone each lookup is
 one HTTP request; another Home Assistant timezone can require two sequential
 ANWB day-label requests for one local day. No more than four tariff fetches run

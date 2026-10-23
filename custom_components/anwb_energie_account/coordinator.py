@@ -1019,7 +1019,7 @@ class ANWBBaseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         commodity: Commodity,
         missing_dates: frozenset[date],
     ) -> DailyTariffData:
-        """Fetch one range containing every missing local DAY tariff."""
+        """Fetch missing local DAY tariffs below the provider's price limit."""
         if not missing_dates:
             return DailyTariffData({}, {})
 
@@ -1032,14 +1032,27 @@ class ANWBBaseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # and one trailing provider day to ensure full interval coverage.
         first_day = min(provider_days) - timedelta(days=1)
         last_day = max(provider_days) + timedelta(days=1)
-        day_start = f"{first_day.isoformat()}T00:00:00.000Z"
-        day_end = f"{last_day.isoformat()}T23:59:59.999Z"
-        url = (
-            "https://api.anwb.nl/energy/energy-services/v2/tarieven/"
-            f"{commodity}?startDate={day_start}&endDate={day_end}&interval=DAY"
-        )
-        response = await self._async_fetch_data(url, None)
-        return _daily_tariff_data(response.get("data", []) or [])
+        all_in_prices: dict[str, float] = {}
+        market_prices: dict[str, float] = {}
+        while first_day <= last_day:
+            # Include padding in the 190-day window, below the 200-price cap.
+            window_end = min(first_day + timedelta(days=189), last_day)
+            day_start = f"{first_day.isoformat()}T00:00:00.000Z"
+            day_end = f"{window_end.isoformat()}T23:59:59.999Z"
+            url = (
+                "https://api.anwb.nl/energy/energy-services/v2/tarieven/"
+                f"{commodity}?startDate={day_start}&endDate={day_end}&interval=DAY"
+            )
+            response = await self._async_fetch_data(url, None)
+            tariffs = _daily_tariff_data(response.get("data", []) or [])
+            all_in_prices.update(tariffs.all_in_prices)
+            market_prices.update(tariffs.market_prices)
+            if window_end == last_day:
+                break
+            # Overlap boundary labels so each window retains its padding.
+            first_day = window_end - timedelta(days=1)
+
+        return DailyTariffData(all_in_prices, market_prices)
 
 
 class ANWBPricingCoordinator(ANWBBaseCoordinator):

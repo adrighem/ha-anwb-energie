@@ -144,8 +144,11 @@ components:
         data for a single-day range. Complete closed-local-day HOUR tariff sets
         are persisted in the integration-local tariff cache for month-to-date
         estimates, while the current day and tomorrow remain refreshable. DAY
-        returned multi-day data during the 2026-07-23 verification. Finite DAY
-        points are persisted individually for year-to-date estimates, which
+        returned multi-day data during the 2026-07-23 verification. Issue 28
+        reports a 200-price limit, with later rows carrying null prices.
+        The integration splits DAY ranges into windows of at most 190
+        calendar-day labels including padding, overlapping boundary labels.
+        Finite DAY points are persisted individually for year-to-date estimates, which
         remain unavailable until every non-zero usage day has a tariff.
     Maandbedrag:
       in: query
