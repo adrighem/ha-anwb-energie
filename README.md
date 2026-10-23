@@ -116,9 +116,11 @@ your installation under **Settings** > **Devices & services** > **Entities**.
 | `Electricity import year to date` | kWh | Imported electricity in the current calendar year. |
 | `Electricity export year to date` | kWh | Exported electricity in the current calendar year. |
 | `Estimated electricity import usage cost month to date` | € | Variable import cost estimated from hourly usage and all-in tariffs. |
-| `Estimated electricity export value month to date` | € | Export value estimated from hourly export and all-in tariffs. |
+| `Estimated electricity export credit month to date` | € | Export credit as ANWB books it, including the net-metering refund, plus unbooked days at all-in prices. Falls back to hourly export times all-in tariffs. |
+| `Estimated electricity export market value month to date` | € | Market part of the export credit: booked market value plus unbooked days at hourly market prices. |
 | `Estimated electricity import usage cost year to date` | € | Estimated variable import cost for the current year. |
-| `Estimated electricity export value year to date` | € | Estimated export value for the current year. |
+| `Estimated electricity export credit year to date` | € | Estimated export credit for the current year. |
+| `Estimated electricity export market value year to date` | € | Estimated export market value for the current year. |
 | `Electricity current all-in price` | €/kWh | Current all-in tariff. The `prices` attribute contains available schedules. |
 | `Electricity current bare market price` | €/kWh | Current bare market price without the other all-in components. |
 
@@ -145,7 +147,7 @@ the start of a new year. Temporary API gaps do not remove registered entities.
 The integration imports separate hourly statistics for:
 
 - electricity import and export usage;
-- estimated electricity import cost and export value; and
+- estimated electricity import cost and export credit; and
 - gas usage and estimated gas cost, when applicable.
 
 Their display names start with `ANWB Account <account number>`. Raw statistic
@@ -196,8 +198,10 @@ The integration's export statistic and export-value entities apply all-in
 tariffs to exported kWh through 31 December 2026. Starting 1 January 2027,
 when the Dutch net-metering scheme ([salderingsregeling][net-metering]) ends,
 export calculations switch to the bare market price (`marktprijs`).
-Sensors expose the active pricing basis in the `export_price_basis` attribute
-(`all_in` or `market`).
+Export credit sensors expose the basis for calculated and not yet booked
+export kWh in the `export_price_basis` attribute (`all_in` before 2027,
+`market` from 2027). The `cost_source` attribute tells whether the credit
+itself comes from ANWB's statistics.
 
 Historical recorder statistics created before upgrading retain the calculation
 applied at insertion time and are not retroactively rewritten.
@@ -211,10 +215,11 @@ Electricity month-to-date and year-to-date costs, export values, and fixed
 charges come from ANWB's own daily cost statistics (Kraken `measurements`,
 the figures the ANWB app shows) when they are available and agree with the
 account-cache usage. Those statistics price every hour, apply net metering
-(saldering) to the netted kWh only, include the account's real fixed charges,
-and switch export to market prices on 1 January 2027 by themselves. Hours after
-the last available day use the tariff calculation below. The `cost_source`
-attribute reports `kraken_statistics` or `calculated`. Otherwise:
+(saldering) as a refund booked against import kWh, include the account's real
+fixed charges, and switch export to market prices on 1 January 2027 by
+themselves. Hours after the last available day use the tariff calculation
+below. The `cost_source` attribute reports `kraken_statistics` or
+`calculated`. Otherwise:
 
 - Month-to-date values match `HOUR` usage to `HOUR` all-in tariffs.
 - Year-to-date values combine the current month's hourly calculation with
@@ -230,6 +235,16 @@ unavailable instead of silently treating missing prices as zero. Failed or
 partial tariff responses remain retryable and do not overwrite valid cached
 tariffs.
 
+The export credit sensors can be far above the exported kWh times any price,
+because the provider's refund follows import kWh. When the credit comes from
+ANWB's statistics, its `booked_market_value`, `booked_net_metering_refund`,
+`booked_other` and `unbooked_credit` attributes add up to the state, and
+`unbooked_kwh` is the export not yet booked. The market value sensors show
+only the market part and are unavailable when ANWB's statistics do not split
+it. The Energy Dashboard export cost statistic stays hourly
+export times all-in price and differs from the credit by design. See
+[docs/cost-calculations.md](docs/cost-calculations.md).
+
 Clean installations do not create combined total-cost sensors with generic
 fixed charges. Use the [cost calculation guide](docs/cost-calculations.md) to
 build account-specific totals from the charges on your contract or invoice.
@@ -237,6 +252,11 @@ That guide also documents the formulas and availability behavior in more
 detail.
 
 ### Upgrades and legacy entities
+
+Renamed in UI: the `Estimated electricity export value` sensors are now named
+`Estimated electricity export credit`. Entity IDs and unique IDs are unchanged
+on existing installations. Dashboards or automations that match friendly names
+may need updating.
 
 Older names such as `Yearly import usage`, `Monthly import usage`, and
 `Current electricity price` are compatibility aliases. Clean installations do

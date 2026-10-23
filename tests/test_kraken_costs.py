@@ -295,3 +295,203 @@ def test_sum_account_cache_fixed_costs_missing_or_invalid_returns_none(bad_row):
 
 def test_sum_account_cache_fixed_costs_empty_returns_none():
     assert kraken_costs.sum_account_cache_fixed_costs([]) is None
+
+
+def _labelled(cents, label):
+    statistic = _stat("CONSUMPTION_COST", cents)
+    if label is not None:
+        statistic["label"] = label
+    return statistic
+
+
+def _generation_page(*, market=True):
+    lines = [
+        _labelled("-25", "GENERATION_ENERGY_TAX_STEP_1"),
+        _labelled("-15", "GENERATION_SUPPLIER_PURCHASING_COST"),
+        _labelled("-3", "GENERATION_SOMETHING_NEW"),
+        _labelled("-2", None),
+        _stat("STANDING_CHARGE_COST", "-7"),
+    ]
+    if market:
+        lines.insert(0, _labelled("-40", "GENERATION_SUPPLIER_DYNAMIC_COST"))
+    return _page([_node("2026-09-15T00:00:00+02:00", "4.0", lines)])
+
+
+def _period(days):
+    return kraken_costs.summarize(days, date(2026, 9, 1), date(2026, 9, 30))
+
+
+def test_parse_page_splits_generation_lines_by_label():
+    """Market value, refund and other buckets add up to the variable total."""
+    days, _ = kraken_costs.parse_daily_costs_page(_generation_page(), AMSTERDAM)
+
+    (day,) = days
+    assert day.variable_cost == pytest.approx(-0.85)
+    assert day.market_value == pytest.approx(-0.40)
+    assert day.net_metering_refund == pytest.approx(-0.40)
+    assert day.standing_charge == pytest.approx(-0.07)
+    assert _period(days).other_variable_cost == pytest.approx(-0.05)
+
+
+def test_parse_page_keeps_a_positive_generation_market_line():
+    """A negative market price books a cost, kept with Kraken's sign."""
+    payload = _page(
+        [
+            _node(
+                "2026-09-15T00:00:00+02:00",
+                "3.0",
+                [
+                    _labelled("12", "GENERATION_SUPPLIER_DYNAMIC_COST"),
+                    _labelled("-30", "GENERATION_ENERGY_TAX_STEP_1"),
+                ],
+            )
+        ]
+    )
+
+    (day,), _ = kraken_costs.parse_daily_costs_page(payload, AMSTERDAM)
+
+    assert day.market_value == pytest.approx(0.12)
+    assert day.net_metering_refund == pytest.approx(-0.30)
+    assert day.variable_cost == pytest.approx(-0.18)
+
+
+def test_parse_page_without_market_line_makes_market_value_unknown():
+    """A day with generation but no market line has no market value."""
+    days, _ = kraken_costs.parse_daily_costs_page(
+        _generation_page(market=False), AMSTERDAM
+    )
+
+    (day,) = days
+    assert day.market_value is None
+    assert day.net_metering_refund == pytest.approx(-0.40)
+    assert _period(days).market_value is None
+    assert _period(days).other_variable_cost is None
+
+
+def test_parse_page_day_without_usage_or_lines_has_known_market_value():
+    """Without usage or variable lines there is nothing to split."""
+    payload = _page([_node("2026-09-15T00:00:00+02:00", "0", [])])
+
+    (day,), _ = kraken_costs.parse_daily_costs_page(payload, AMSTERDAM)
+
+    assert day.market_value == 0.0
+    assert day.net_metering_refund == 0.0
+
+
+def test_parse_page_unlabelled_makes_split_unknown():
+    """Legacy responses keep totals but cannot split them."""
+    (day,), _ = kraken_costs.parse_daily_costs_page(
+        _generation_page(), AMSTERDAM, labelled=False
+    )
+
+    assert day.variable_cost == pytest.approx(-0.85)
+    assert day.standing_charge == pytest.approx(-0.07)
+    assert day.market_value is None
+    assert day.net_metering_refund is None
+
+
+def test_parse_page_consumption_labels_count_as_other():
+    """Import lines never land in the generation buckets."""
+    payload = _page(
+        [
+            _node(
+                "2026-09-15T00:00:00+02:00",
+                "2.0",
+                [
+                    _labelled("30", "SUPPLIER_DYNAMIC_COST"),
+                    _labelled("20", "ENERGY_TAX_STEP_1"),
+                ],
+            )
+        ]
+    )
+
+    (day,), _ = kraken_costs.parse_daily_costs_page(payload, AMSTERDAM)
+
+    assert day.market_value is None
+    assert day.net_metering_refund == 0.0
+    assert day.variable_cost == pytest.approx(0.5)
+
+
+def test_parse_page_logs_unknown_label_once_per_log(caplog):
+    """Unexpected labels are logged by name once per label log."""
+    caplog.set_level("DEBUG", logger=kraken_costs.__name__)
+    first, second = kraken_costs.KrakenLabelLog(), kraken_costs.KrakenLabelLog()
+
+    for label_log in (first, first, second):
+        kraken_costs.parse_daily_costs_page(
+            _generation_page(), AMSTERDAM, label_log=label_log
+        )
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert messages == [
+        "Kraken variable cost line with unexpected label GENERATION_SOMETHING_NEW",
+        "Kraken variable cost line with unexpected label <missing>",
+    ] * 2
+
+
+def test_parse_page_rejects_non_text_label():
+    """A non-text label fails loudly."""
+    payload = _page(
+        [_node("2026-09-15T00:00:00+02:00", "1.0", [_labelled("-40", 12)])]
+    )
+
+    with pytest.raises(KrakenCostError):
+        kraken_costs.parse_daily_costs_page(payload, AMSTERDAM)
+
+
+@pytest.mark.parametrize(
+    "extensions",
+    [{"errorType": "VALIDATION"}, {"code": "GRAPHQL_VALIDATION_FAILED"}],
+)
+def test_parse_page_raises_schema_error_on_validation_error(extensions):
+    """A query the schema rejects raises the dedicated schema error."""
+    payload = {"errors": [{"message": "Cannot query field", "extensions": extensions}]}
+
+    with pytest.raises(kraken_costs.KrakenSchemaError):
+        kraken_costs.parse_daily_costs_page(payload, AMSTERDAM)
+
+
+def test_parse_page_other_graphql_error_is_not_a_schema_error():
+    """Other GraphQL errors keep the generic error."""
+    payload = {"errors": [{"message": "Too many requests"}]}
+
+    with pytest.raises(KrakenCostError) as raised:
+        kraken_costs.parse_daily_costs_page(payload, AMSTERDAM)
+    assert not isinstance(raised.value, kraken_costs.KrakenSchemaError)
+
+
+def test_summarize_sums_generation_buckets():
+    """Period totals carry the label buckets of the selected days."""
+    days = [
+        KrakenDailyCost(
+            date(2026, 9, day),
+            2.0,
+            -0.5,
+            0.0,
+            True,
+            market_value=-0.2 if day != 1 else None,
+            net_metering_refund=-0.25,
+        )
+        for day in (1, 2, 3)
+    ]
+
+    period = kraken_costs.summarize(days, date(2026, 9, 2), date(2026, 9, 3))
+
+    assert period.days == 2
+    assert period.market_value == pytest.approx(-0.4)
+    assert period.net_metering_refund == pytest.approx(-0.5)
+    assert period.other_variable_cost == pytest.approx(-0.1)
+    # A day with an unknown split makes the whole period unknown.
+    whole = kraken_costs.summarize(days, date(2026, 9, 1), date(2026, 9, 3))
+    assert whole.market_value is None
+
+
+def test_daily_costs_queries_select_label_only_in_labelled_query():
+    """Kraken rejects ``unit``; only the labelled query selects ``label``."""
+    statistics = kraken_costs.DAILY_COSTS_QUERY.split("statistics {", 1)[1]
+    legacy = kraken_costs.LEGACY_DAILY_COSTS_QUERY.split("statistics {", 1)[1]
+    assert "label" in statistics
+    assert "value" not in statistics
+    assert "unit" not in statistics
+    assert "label" not in legacy
+    assert legacy == statistics.replace("\n                label", "")

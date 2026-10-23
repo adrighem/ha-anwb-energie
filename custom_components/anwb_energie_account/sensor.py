@@ -78,6 +78,7 @@ GAS_SENSOR_KEYS = {
 MONTHLY_MONETARY_SENSOR_KEYS = {
     "electricity_import_month_to_date_cost",
     "electricity_export_month_to_date_credit",
+    "electricity_export_month_to_date_market_value",
     "electricity_month_to_date_fixed_cost",
     "electricity_month_to_date_total_cost",
     "gas_month_to_date_cost",
@@ -94,6 +95,7 @@ MONTHLY_MONETARY_SENSOR_KEYS = {
 YEARLY_MONETARY_SENSOR_KEYS = {
     "electricity_import_year_to_date_cost",
     "electricity_export_year_to_date_credit",
+    "electricity_export_year_to_date_market_value",
     "gas_year_to_date_cost",
 }
 MONTHLY_PERIOD_SENSOR_KEYS = MONTHLY_MONETARY_SENSOR_KEYS | {
@@ -127,6 +129,26 @@ ELECTRICITY_IMPORT_YEAR_COST_KEYS = {
 }
 ELECTRICITY_EXPORT_YEAR_COST_KEYS = {
     "electricity_export_year_to_date_credit",
+}
+# Coordinator key holding the credit breakdown of each export credit sensor.
+# The coordinator stores None when the credit is calculated or unavailable.
+ELECTRICITY_EXPORT_CREDIT_BREAKDOWN_KEYS = {
+    "electricity_export_month_to_date_credit": (
+        "electricity_export_month_to_date_credit_breakdown"
+    ),
+    "export_cost": "electricity_export_month_to_date_credit_breakdown",
+    "electricity_export_year_to_date_credit": (
+        "electricity_export_year_to_date_credit_breakdown"
+    ),
+}
+# Coordinator key holding the tariff coverage of each export market value sensor.
+ELECTRICITY_EXPORT_MARKET_VALUE_COVERAGE_KEYS = {
+    "electricity_export_month_to_date_market_value": (
+        "electricity_export_market_value_tariff_coverage"
+    ),
+    "electricity_export_year_to_date_market_value": (
+        "electricity_export_year_to_date_market_value_tariff_coverage"
+    ),
 }
 ELECTRICITY_FIXED_COST_KEYS = {
     "electricity_month_to_date_fixed_cost",
@@ -171,12 +193,14 @@ ELECTRICITY_COST_SOURCE_KEYS = (
     | ELECTRICITY_IMPORT_YEAR_COST_KEYS
     | ELECTRICITY_EXPORT_YEAR_COST_KEYS
     | ELECTRICITY_TOTAL_COST_KEYS
+    | set(ELECTRICITY_EXPORT_MARKET_VALUE_COVERAGE_KEYS)
 )
 COST_ESTIMATE_SENSOR_KEYS = (
     ELECTRICITY_IMPORT_COST_KEYS
     | ELECTRICITY_EXPORT_COST_KEYS
     | ELECTRICITY_IMPORT_YEAR_COST_KEYS
     | ELECTRICITY_EXPORT_YEAR_COST_KEYS
+    | set(ELECTRICITY_EXPORT_MARKET_VALUE_COVERAGE_KEYS)
     | ELECTRICITY_FIXED_COST_KEYS
     | ELECTRICITY_TOTAL_COST_KEYS
     | GAS_USAGE_COST_KEYS
@@ -231,6 +255,13 @@ SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
         state_class=SensorStateClass.TOTAL,
     ),
     SensorEntityDescription(
+        key="electricity_export_month_to_date_market_value",
+        translation_key="electricity_export_month_to_date_market_value",
+        device_class=SensorDeviceClass.MONETARY,
+        native_unit_of_measurement=CURRENCY_EURO,
+        state_class=SensorStateClass.TOTAL,
+    ),
+    SensorEntityDescription(
         key="electricity_import_year_to_date",
         translation_key="electricity_import_year_to_date",
         device_class=SensorDeviceClass.ENERGY,
@@ -254,6 +285,13 @@ SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
     SensorEntityDescription(
         key="electricity_export_year_to_date_credit",
         translation_key="electricity_export_year_to_date_credit",
+        device_class=SensorDeviceClass.MONETARY,
+        native_unit_of_measurement=CURRENCY_EURO,
+        state_class=SensorStateClass.TOTAL,
+    ),
+    SensorEntityDescription(
+        key="electricity_export_year_to_date_market_value",
+        translation_key="electricity_export_year_to_date_market_value",
         device_class=SensorDeviceClass.MONETARY,
         native_unit_of_measurement=CURRENCY_EURO,
         state_class=SensorStateClass.TOTAL,
@@ -712,7 +750,8 @@ class ANWBEnergieAccountSensor(CoordinatorEntity[ANWBBaseCoordinator], SensorEnt
             val = self.coordinator.data.get(self.entity_description.key)
         if val is None:
             return None
-        return round(val, 2)
+        # Adding 0.0 turns a rounded -0.0 into 0.0.
+        return round(val, 2) + 0.0
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
@@ -751,6 +790,11 @@ class ANWBEnergieAccountSensor(CoordinatorEntity[ANWBBaseCoordinator], SensorEnt
                     cost_source := self.coordinator.data.get("electricity_cost_source")
                 ):
                     attributes["cost_source"] = cost_source
+
+                if breakdown_key := ELECTRICITY_EXPORT_CREDIT_BREAKDOWN_KEYS.get(key):
+                    attributes.update(
+                        self.coordinator.data.get(breakdown_key) or {}
+                    )
 
                 if key in ELECTRICITY_IMPORT_COST_KEYS:
                     attributes["tariff_coverage"] = self.coordinator.data.get(
@@ -792,6 +836,12 @@ class ANWBEnergieAccountSensor(CoordinatorEntity[ANWBBaseCoordinator], SensorEnt
                         )
                     ) is not None:
                         attributes["export_price_basis"] = export_price_basis
+                elif coverage_key := ELECTRICITY_EXPORT_MARKET_VALUE_COVERAGE_KEYS.get(
+                    key
+                ):
+                    attributes["tariff_coverage"] = self.coordinator.data.get(
+                        coverage_key
+                    )
                 elif key in ELECTRICITY_FIXED_COST_KEYS:
                     attributes["fixed_cost_source"] = self.coordinator.data.get(
                         "electricity_fixed_cost_source"
