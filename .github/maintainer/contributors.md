@@ -29,3 +29,5 @@ issue or pull request.
 
 - Reported ISSUE:28, ISSUE:29, ISSUE:30 with detailed raw API evidence.
 - Offered probe reports; good source for account-cache and Kraken data.
+- @Remc0000: PR:31 credited manually in the v1.5.0 changelog, because
+  `include-commit-authors` does not add credits in this setup.

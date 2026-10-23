@@ -105,3 +105,11 @@ only when booked from Kraken; the euro attributes add up to the state. Keep
 `export_price_basis` as `all_in` or `market` for calculated and unbooked kWh.
 A missing market line or a schema that rejects `label` makes the market value
 unknown, never zero, and leaves the credit unchanged.
+
+## 2026-10-23: Kraken refund lines track import
+
+Live probe of a second account: GENERATION refund lines carry kWh equal to that
+month's import every month. Do not guard export credit on netted kWh vs
+min(import, export). If Kraken rejects the `label` field, fall back to the
+legacy query and mark the market split unknown instead of dropping provider
+costs. Released in v1.5.0 (PR:38).
