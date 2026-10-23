@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.5.0](https://github.com/adrighem/ha-anwb-energie/compare/v1.4.1...v1.5.0) (2026-10-23)
+
+
+### Features
+
+* add export market value sensors and split export credit breakdown ([#38](https://github.com/adrighem/ha-anwb-energie/issues/38)) ([4fa196c](https://github.com/adrighem/ha-anwb-energie/commit/4fa196c200733276e8310218b5af5ae801acce07)), closes [#29](https://github.com/adrighem/ha-anwb-energie/issues/29)
+* **probe:** add current-month window and Kraken statistics command ([#34](https://github.com/adrighem/ha-anwb-energie/issues/34)) ([398aa2b](https://github.com/adrighem/ha-anwb-energie/commit/398aa2b1bee0f078c8596ef1c6464a00acd235d3))
+
+
+### Bug Fixes
+
+* split daily tariff requests below the 200-price limit ([#31](https://github.com/adrighem/ha-anwb-energie/issues/31)) ([4e1cdee](https://github.com/adrighem/ha-anwb-energie/commit/4e1cdeee806b8f7b9cdb48824170ee6adfa7c362)) (@Remc0000)
+* sum hourly account-cache fixed charges (fixes [#30](https://github.com/adrighem/ha-anwb-energie/issues/30)) ([10d384c](https://github.com/adrighem/ha-anwb-energie/commit/10d384ccf4ef6644775aeae0036ac3d460aae5ad))
+
 ## [1.4.1](https://github.com/adrighem/ha-anwb-energie/compare/v1.4.0...v1.4.1) (2026-10-16)
 
 
