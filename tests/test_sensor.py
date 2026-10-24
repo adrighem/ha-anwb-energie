@@ -3,6 +3,7 @@
 
 import math
 import sys
+from dataclasses import dataclass
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -45,10 +46,14 @@ class SensorStateClass:
     MEASUREMENT = "measurement"
 
 
+@dataclass(frozen=True, kw_only=True)
 class SensorEntityDescription:
-    def __init__(self, **kwargs):
-        self.__dict__.update(kwargs)
-        self.key = kwargs.get("key")
+    key: str
+    device_class: str | None = None
+    native_unit_of_measurement: str | None = None
+    state_class: str | None = None
+    translation_key: str | None = None
+    entity_registry_enabled_default: bool = True
 
 
 class SensorEntity:
@@ -309,6 +314,43 @@ def test_legacy_sensor_data_keys_point_to_canonical_values():
         "fixed_cost_gas": "gas_month_to_date_fixed_cost",
         "total_cost_gas": "gas_month_to_date_total_cost",
     }
+
+
+def test_legacy_sensor_descriptions_match_canonical():
+    """Test every legacy description matches its canonical counterpart."""
+    desc_by_key = {desc.key: desc for desc in SENSOR_TYPES}
+    legacy_pairs = (
+        ("import_usage", "electricity_import_month_to_date"),
+        ("export_usage", "electricity_export_month_to_date"),
+        ("import_cost", "electricity_import_month_to_date_cost"),
+        ("export_cost", "electricity_export_month_to_date_credit"),
+        ("yearly_import_usage", "electricity_import_year_to_date"),
+        ("yearly_export_usage", "electricity_export_year_to_date"),
+        ("fixed_cost", "electricity_month_to_date_fixed_cost"),
+        ("total_cost", "electricity_month_to_date_total_cost"),
+        ("current_price", "electricity_current_price"),
+        ("gas_usage", "gas_month_to_date"),
+        ("gas_cost", "gas_month_to_date_cost"),
+        ("yearly_gas_usage", "gas_year_to_date"),
+        ("fixed_cost_gas", "gas_month_to_date_fixed_cost"),
+        ("total_cost_gas", "gas_month_to_date_total_cost"),
+        ("current_gas_price", "gas_current_price"),
+    )
+    for legacy_key, modern_key in legacy_pairs:
+        legacy = desc_by_key[legacy_key]
+        modern = desc_by_key[modern_key]
+        assert legacy.device_class == modern.device_class
+        assert legacy.native_unit_of_measurement == modern.native_unit_of_measurement
+        assert legacy.state_class == modern.state_class
+        assert legacy.period == modern.period
+        assert legacy.source == modern.source
+        assert legacy.is_gas == modern.is_gas
+        assert legacy.optional == modern.optional
+        assert legacy.estimate == modern.estimate
+        assert legacy.attributes_fn == modern.attributes_fn
+        assert legacy.value_fn == modern.value_fn
+        assert legacy.legacy is True
+        assert modern.legacy is False
 
 
 import datetime  # noqa: E402
