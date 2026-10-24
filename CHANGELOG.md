@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.5.1](https://github.com/adrighem/ha-anwb-energie/compare/v1.5.0...v1.5.1) (2026-10-24)
+
+
+### Bug Fixes
+
+* refresh Kraken token on HTTP 401 or GraphQL auth errors (fixes [#35](https://github.com/adrighem/ha-anwb-energie/issues/35)) ([#40](https://github.com/adrighem/ha-anwb-energie/issues/40)) ([b9b833d](https://github.com/adrighem/ha-anwb-energie/commit/b9b833d15c53092197f318860cef623196d621ac))
+* retry incomplete hourly electricity market tariffs ([#32](https://github.com/adrighem/ha-anwb-energie/issues/32)) ([80a7f9f](https://github.com/adrighem/ha-anwb-energie/commit/80a7f9f1c9e6ade27fe9bf82c0c4ee3df5b42c05))
+
 ## [1.5.0](https://github.com/adrighem/ha-anwb-energie/compare/v1.4.1...v1.5.0) (2026-10-23)
 
 
