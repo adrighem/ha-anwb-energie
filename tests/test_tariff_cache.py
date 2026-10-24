@@ -135,8 +135,8 @@ def _stored_hourly_bucket(
 
 
 @pytest.mark.asyncio
-async def test_closed_hourly_day_survives_warm_restart_with_partial_market():
-    """A complete all-in day persists without requiring every market row."""
+async def test_closed_hourly_day_fills_missing_market_prices_after_restart():
+    """Persisted all-in prices survive a market-only fill after restart."""
     clock = MutableClock(datetime(2026, 4, 20, 12, tzinfo=timezone.utc))
     store = FakeStore()
     local_day = date(2026, 1, 15)
@@ -168,18 +168,117 @@ async def test_closed_hourly_day_survives_warm_restart_with_partial_market():
     assert "token" not in serialized.lower()
     assert "authorization" not in serialized.lower()
 
-    async def must_not_fetch() -> HourlyTariffData:
-        raise AssertionError("warm cache unexpectedly fetched tariffs")
+    market_fill_calls = 0
+
+    async def fetch_market() -> HourlyTariffData:
+        nonlocal market_fill_calls
+        market_fill_calls += 1
+        return HourlyTariffData({}, _hourly_data(local_day).market_prices)
 
     warm_cache = TariffCache(store, "Europe/Amsterdam", clock=clock)
     warm_result = await warm_cache.async_get_hourly_day(
         "electricity",
         local_day,
-        must_not_fetch,
+        fetch_market,
     )
 
     assert store.load_calls == 2
-    assert warm_result == cold_result
+    assert market_fill_calls == 1
+    assert warm_result.all_in_prices == cold_result.all_in_prices
+    assert warm_result.market_prices == _hourly_data(local_day).market_prices
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "local_day",
+    [date(2026, 3, 29), date(2026, 10, 25), date(2027, 1, 15)],
+)
+async def test_closed_hourly_day_retries_market_gaps_and_retains_all_in_on_failure(
+    local_day,
+):
+    clock = MutableClock(
+        datetime.combine(local_day + timedelta(days=1), time(12), timezone.utc)
+    )
+    cache = TariffCache(None, "Europe/Amsterdam", clock=clock)
+    partial = _hourly_data(local_day, market_rows=1)
+    complete = _hourly_data(local_day)
+    fetch_calls = 0
+
+    async def fetch():
+        nonlocal fetch_calls
+        fetch_calls += 1
+        if fetch_calls == 1:
+            return partial
+        if fetch_calls == 2:
+            raise OSError("temporary tariff failure")
+        return HourlyTariffData({}, complete.market_prices)
+
+    first = await cache.async_get_hourly_day("electricity", local_day, fetch)
+    await cache.async_prune()
+    assert await cache.async_get_hourly_day("electricity", local_day, fetch) == first
+    assert fetch_calls == 1
+
+    clock.advance(timedelta(minutes=31))
+    with pytest.raises(OSError, match="temporary tariff failure"):
+        await cache.async_get_hourly_day("electricity", local_day, fetch)
+    cached = await cache.async_get_cached_hourly_day("electricity", local_day)
+    assert cached == partial
+
+    filled = await cache.async_get_hourly_day("electricity", local_day, fetch)
+    assert filled.all_in_prices == partial.all_in_prices
+    assert filled.market_prices == complete.market_prices
+    assert fetch_calls == 3
+    clock.advance(timedelta(hours=1))
+    assert await cache.async_get_hourly_day("electricity", local_day, fetch) == filled
+    assert fetch_calls == 3
+
+
+@pytest.mark.asyncio
+async def test_newly_closed_all_in_prices_survive_failed_market_retry():
+    local_day = date(2026, 4, 20)
+    clock = MutableClock(datetime(2026, 4, 20, 20, tzinfo=timezone.utc))
+    store = FakeStore()
+    cache = TariffCache(store, "Europe/Amsterdam", clock=clock)
+    source = _hourly_data(local_day, market_rows=0)
+
+    async def fetch():
+        return source
+
+    await cache.async_get_hourly_day("electricity", local_day, fetch)
+    assert store.save_requests == 0
+    clock.advance(timedelta(hours=3))
+
+    async def fail():
+        raise OSError("temporary market-price failure")
+
+    with pytest.raises(OSError, match="temporary market-price failure"):
+        await cache.async_get_hourly_day("electricity", local_day, fail)
+
+    assert await cache.async_get_cached_hourly_day("electricity", local_day) == source
+    assert store.save_requests == 1
+    payload = store.flush()
+    assert local_day.isoformat() in payload["commodities"]["electricity"]["HOUR"]
+
+
+@pytest.mark.asyncio
+async def test_closed_gas_day_does_not_require_market_prices():
+    local_day = date(2027, 1, 15)
+    clock = MutableClock(datetime(2027, 1, 16, 12, tzinfo=timezone.utc))
+    store = FakeStore()
+    source = _hourly_data(local_day, market_rows=0)
+    cache = TariffCache(store, "Europe/Amsterdam", clock=clock)
+
+    async def fetch():
+        return source
+
+    await cache.async_get_hourly_day("gas", local_day, fetch)
+    store.flush()
+    restarted = TariffCache(store, "Europe/Amsterdam", clock=clock)
+
+    async def must_not_fetch():
+        raise AssertionError("gas does not require market prices")
+
+    assert await restarted.async_get_hourly_day("gas", local_day, must_not_fetch) == source
 
 
 @pytest.mark.asyncio
@@ -529,7 +628,7 @@ async def test_closed_dst_days_persist_only_with_real_local_hour_count(
     """Spring and autumn days use local boundaries rather than a fixed 24."""
     clock = MutableClock(datetime(2026, 12, 1, 12, tzinfo=timezone.utc))
     store = FakeStore()
-    source = _hourly_data(local_day, market_rows=0)
+    source = _hourly_data(local_day)
     assert len(source.all_in_prices) == expected_hours
 
     async def fetch() -> HourlyTariffData:

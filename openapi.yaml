@@ -151,6 +151,8 @@ components:
         calendar-day labels including padding, overlapping boundary labels.
         Finite DAY points are persisted individually for year-to-date estimates, which
         remain unavailable until every non-zero usage day has a tariff.
+        Electricity HOUR market-price gaps remain retryable even when all-in
+        prices are complete and persisted; gas does not require market prices.
     Maandbedrag:
       in: query
       name: maandbedrag

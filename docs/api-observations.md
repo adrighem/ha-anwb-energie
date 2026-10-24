@@ -201,6 +201,13 @@ Failed, empty, or partial responses do not evict valid cached values or mark a
 period complete. Missing and newly closed periods remain retryable. Strict
 coverage still applies: a non-zero usage interval without a matching tariff
 makes its cost estimate unavailable rather than implicitly pricing it at zero.
+Closed electricity days with complete all-in prices but missing market prices
+retain their persisted all-in prices and retry the market gaps after the
+30-minute memory TTL. After a restart, an incomplete persisted bucket is
+retried on first access. Market-only responses merge with those existing
+prices. A failed retry is logged and coordinators continue using available
+cached tariffs; missing market prices still leave the affected tariff-based
+export estimate unavailable from 2027. Gas does not require market prices.
 This bounds refresh traffic, but the completed-month part remains a daily
 aggregate estimate rather than an hourly usage-weighted calculation.
 

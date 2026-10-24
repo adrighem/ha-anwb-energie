@@ -1304,7 +1304,7 @@ class ANWBPricingCoordinator(ANWBBaseCoordinator):
             asyncio.gather(*gas_price_tasks, return_exceptions=True),
         )
 
-        for result in prices_results:
+        for local_day, result in zip(electricity_days, prices_results, strict=True):
             if isinstance(result, Exception):
                 if isinstance(result, UpdateFailed) and "Kraken token expired" in str(
                     result
@@ -1314,7 +1314,9 @@ class ANWBPricingCoordinator(ANWBBaseCoordinator):
                     "Failed to fetch part of the electricity tariff window: %s",
                     result,
                 )
-                continue
+                result = await self.tariff_cache.async_get_cached_hourly_day(
+                    "electricity", local_day
+                )
             price_map.update(result.all_in_prices)
             market_price_map.update(result.market_prices)
 
@@ -1898,7 +1900,9 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
 
         price_map: dict[str, float] = {}
         market_price_map: dict[str, float] = {}
-        for result in prices_results:
+        for local_day, result in zip(
+            sorted(electricity_hourly_days), prices_results, strict=True
+        ):
             if isinstance(result, Exception):
                 if isinstance(result, UpdateFailed) and "Kraken token expired" in str(
                     result
@@ -1908,7 +1912,9 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
                     "Failed to fetch part of the electricity tariff window: %s",
                     result,
                 )
-                continue
+                result = await self.tariff_cache.async_get_cached_hourly_day(
+                    "electricity", local_day
+                )
             price_map.update(result.all_in_prices)
             market_price_map.update(result.market_prices)
 

@@ -270,7 +270,10 @@ class TariffCache:
         local_day = self._validated_date(local_day)
         day_key = local_day.isoformat()
 
-        if cached := self._hourly[commodity].get(day_key):
+        cached = self._hourly[commodity].get(day_key)
+        if cached is not None and self._hourly_market_is_complete(
+            commodity, local_day, cached
+        ):
             return self._copy_hourly(cached)
 
         now = self._now()
@@ -281,10 +284,14 @@ class TariffCache:
             and local_day < self._local_today(now)
             and self._is_complete_hourly_day(local_day, previous_memory.data)
         ):
-            self._hourly[commodity][day_key] = previous_memory.data
-            self._memory_hourly.pop(memory_key, None)
-            self._schedule_save()
-            return self._copy_hourly(previous_memory.data)
+            if self._hourly[commodity].get(day_key) != previous_memory.data:
+                self._hourly[commodity][day_key] = previous_memory.data
+                self._schedule_save()
+            if self._hourly_market_is_complete(
+                commodity, local_day, previous_memory.data
+            ):
+                self._memory_hourly.pop(memory_key, None)
+                return self._copy_hourly(previous_memory.data)
         if previous_memory is not None and previous_memory.expires_at > now:
             return self._copy_hourly(previous_memory.data)
 
@@ -295,19 +302,28 @@ class TariffCache:
                 raise TypeError("hourly fetch callback must return HourlyTariffData")
 
             current = self._memory_hourly.get(memory_key)
-            base = current.data if current is not None else None
+            base = (
+                current.data
+                if current is not None
+                else self._hourly[commodity].get(day_key)
+            )
             normalized = self._normalize_hourly_data(
                 local_day,
                 fetched,
                 base=base,
             )
             current_now = self._now()
-            if local_day < self._local_today(
+            persist = local_day < self._local_today(
                 current_now
-            ) and self._is_complete_hourly_day(local_day, normalized):
+            ) and self._is_complete_hourly_day(local_day, normalized)
+            if persist:
                 self._hourly[commodity][day_key] = normalized
-                self._memory_hourly.pop(memory_key, None)
                 self._schedule_save()
+
+            if persist and self._hourly_market_is_complete(
+                commodity, local_day, normalized
+            ):
+                self._memory_hourly.pop(memory_key, None)
             else:
                 self._memory_hourly[memory_key] = _MemoryHourlyBucket(
                     normalized,
@@ -320,6 +336,24 @@ class TariffCache:
             _fetch_and_cache,
         )
         return self._copy_hourly(result)
+
+    async def async_get_cached_hourly_day(
+        self,
+        commodity: Commodity,
+        local_day: date,
+    ) -> HourlyTariffData:
+        """Return available cached hourly tariffs without starting a fetch."""
+        await self.async_initialize()
+        commodity = self._validated_commodity(commodity)
+        local_day = self._validated_date(local_day)
+        day_key = local_day.isoformat()
+        cached = self._hourly[commodity].get(day_key)
+        if cached is not None:
+            return self._copy_hourly(cached)
+        memory = self._memory_hourly.get((commodity, day_key))
+        if memory is not None and memory.expires_at > self._now():
+            return self._copy_hourly(memory.data)
+        return HourlyTariffData({})
 
     async def async_get_daily_tariffs(
         self,
@@ -422,9 +456,11 @@ class TariffCache:
                 and local_day < today
                 and self._is_complete_hourly_day(local_day, bucket.data)
             ):
-                self._hourly[commodity][day_key] = bucket.data
-                self._memory_hourly.pop((commodity, day_key), None)
-                changed = True
+                if self._hourly[commodity].get(day_key) != bucket.data:
+                    self._hourly[commodity][day_key] = bucket.data
+                    changed = True
+                if self._hourly_market_is_complete(commodity, local_day, bucket.data):
+                    self._memory_hourly.pop((commodity, day_key), None)
 
         for commodity in _COMMODITIES:
             hourly = self._hourly[commodity]
@@ -666,6 +702,16 @@ class TariffCache:
     ) -> bool:
         """Return whether every real hour in a local day has an all-in tariff."""
         return self._expected_hour_keys(local_day).issubset(data.all_in_prices)
+
+    def _hourly_market_is_complete(
+        self,
+        commodity: Commodity,
+        local_day: date,
+        data: HourlyTariffData,
+    ) -> bool:
+        return commodity == "gas" or self._expected_hour_keys(local_day).issubset(
+            data.market_prices
+        )
 
     def _expected_hour_keys(self, local_day: date) -> set[str]:
         """Return the 23, 24, or 25 UTC keys belonging to a local day."""

@@ -3488,3 +3488,42 @@ async def test_fetch_kraken_daily_costs_limits_pages(auth_mock):
             datetime.date(2026, 4, 3),
         )
     assert auth_mock.websession.post.call_count == coord_mod.KRAKEN_MAX_PAGES
+
+
+@pytest.mark.asyncio
+async def test_failed_market_retry_keeps_cached_all_in_costs(auth_mock, caplog):
+    clock = SimpleNamespace(
+        value=datetime.datetime(2026, 4, 20, 12, tzinfo=datetime.timezone.utc)
+    )
+    cache = coord_mod.TariffCache(
+        None, "Europe/Amsterdam", clock=lambda: clock.value
+    )
+    local_day = datetime.date(2026, 4, 1)
+    partial = coord_mod._hourly_tariff_data(
+        _complete_amsterdam_hourly_tariffs(local_day, all_in_price=20.0)
+    )
+    await cache.async_get_hourly_day(
+        "electricity", local_day, AsyncMock(return_value=partial)
+    )
+    clock.value += datetime.timedelta(minutes=31)
+    coordinator = _april_coordinator(auth_mock)
+    coordinator.tariff_cache = cache
+    failed_retries = []
+
+    def fetch(url, token):
+        if "tarieven/electricity?" in url and "startDate=2026-03-31" in url:
+            failed_retries.append(url)
+            raise UpdateFailed("temporary market-price failure")
+        return _april_account_cache(url, token)
+
+    result = await _run_april_update(
+        coordinator,
+        AsyncMock(side_effect=coord_mod.KrakenCostError("not available")),
+        cache=fetch,
+    )
+
+    assert len(failed_retries) == 1
+    assert "temporary market-price failure" in caplog.text
+    assert result["electricity_cost_source"] == "calculated"
+    assert result["electricity_import_month_to_date_cost"] == pytest.approx(0.6)
+    assert result["electricity_import_tariff_coverage"]["complete"] is True
