@@ -3366,9 +3366,14 @@ async def test_kraken_failure_without_previous_statistics(auth_mock):
 
 
 class _FakeResponse:
-    def __init__(self, payload):
+    def __init__(self, payload, status=200):
         self._payload = payload
+        self.status = status
         self.raise_for_status = MagicMock()
+        if status >= 400:
+            self.raise_for_status.side_effect = coord_mod.ClientResponseError(
+                MagicMock(), (), status=status, message="rejected"
+            )
 
     async def json(self):
         return self._payload
@@ -3527,3 +3532,269 @@ async def test_failed_market_retry_keeps_cached_all_in_costs(auth_mock, caplog):
     assert result["electricity_cost_source"] == "calculated"
     assert result["electricity_import_month_to_date_cost"] == pytest.approx(0.6)
     assert result["electricity_import_tariff_coverage"]["complete"] is True
+
+
+@pytest.mark.asyncio
+async def test_kraken_graphql_http_401_refreshes_token_and_retries(auth_mock):
+    """Kraken GraphQL HTTP 401 triggers token refresh and retries the update."""
+    coordinator = _april_coordinator(auth_mock)
+    coordinator._kraken_token = "stale_token"
+    fresh_token = "fresh_token_123"
+    coordinator._async_get_kraken_token = AsyncMock(return_value=fresh_token)
+
+    days = {
+        "CONSUMPTION": _kraken_days(
+            datetime.date(2026, 1, 1),
+            datetime.date(2026, 4, 19),
+            {datetime.date(2026, 1, 1): (30.0, 6.0), datetime.date(2026, 4, 1): (2.0, 0.5)},
+            standing=-0.5,
+        ),
+        "GENERATION": _kraken_days(
+            datetime.date(2026, 1, 1),
+            datetime.date(2026, 4, 19),
+            {datetime.date(2026, 1, 1): (10.0, -1.5), datetime.date(2026, 4, 1): (5.0, -0.6)},
+        ),
+    }
+
+    def _graphql_server(url, *, json=None, headers=None):
+        if headers.get("Authorization") == "Bearer stale_token":
+            return _FakeResponse(None, status=401)
+        direction = json["variables"]["direction"]
+        return _FakeResponse(
+            {
+                "data": {
+                    "account": {
+                        "properties": [
+                            {
+                                "measurements": {
+                                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                    "edges": [
+                                        {
+                                            "node": {
+                                                "value": day.usage,
+                                                "startAt": datetime.datetime.combine(
+                                                    day.day,
+                                                    datetime.time.min,
+                                                    tzinfo=datetime.timezone.utc,
+                                                ).isoformat(),
+                                                "metaData": {
+                                                    "statistics": [
+                                                        {
+                                                            "type": "CONSUMPTION_COST",
+                                                            "costInclTax": {
+                                                                "estimatedAmount": int(
+                                                                    day.variable_cost * 100
+                                                                )
+                                                            },
+                                                        },
+                                                        {
+                                                            "type": "STANDING_CHARGE_COST",
+                                                            "costInclTax": {
+                                                                "estimatedAmount": int(
+                                                                    day.standing_charge * 100
+                                                                )
+                                                            },
+                                                        },
+                                                    ]
+                                                },
+                                            }
+                                        }
+                                        for day in days[direction]
+                                    ],
+                                }
+                            }
+                        ]
+                    }
+                }
+            }
+        )
+
+    auth_mock.websession.post = MagicMock(side_effect=_graphql_server)
+
+    with (
+        patch.object(
+            coord_mod.dt_util,
+            "utcnow",
+            return_value=datetime.datetime(2026, 4, 20, 12, tzinfo=datetime.timezone.utc),
+        ),
+        patch.object(
+            coord_mod.dt_util,
+            "as_local",
+            side_effect=lambda value: value.astimezone(AMSTERDAM),
+        ),
+        patch.object(
+            coord_mod, "_configured_time_zone_name", return_value="Europe/Amsterdam"
+        ),
+        patch.object(
+            ANWBConsumptionCoordinator,
+            "_async_fetch_kraken_daily_costs",
+            REAL_FETCH_KRAKEN_DAILY_COSTS,
+        ),
+        patch.object(coordinator, "_async_fetch_data", new_callable=AsyncMock) as fetch,
+        patch.object(coordinator, "_insert_statistics", new_callable=AsyncMock),
+    ):
+        fetch.side_effect = _april_account_cache
+        result = await coordinator._async_update_data()
+
+    assert coordinator._kraken_token == fresh_token
+    assert coordinator._async_get_kraken_token.call_count == 1
+    assert result["electricity_cost_source"] == "kraken_statistics"
+    assert result["electricity_import_month_to_date_cost"] == pytest.approx(0.7)
+
+
+@pytest.mark.asyncio
+async def test_kraken_graphql_auth_payload_refreshes_token_and_retries(auth_mock):
+    """Kraken GraphQL HTTP 200 auth error triggers token refresh and retries."""
+    coordinator = _april_coordinator(auth_mock)
+    coordinator._kraken_token = "stale_token"
+    fresh_token = "fresh_token_456"
+    coordinator._async_get_kraken_token = AsyncMock(return_value=fresh_token)
+
+    days = {
+        "CONSUMPTION": _kraken_days(
+            datetime.date(2026, 1, 1),
+            datetime.date(2026, 4, 19),
+            {datetime.date(2026, 1, 1): (30.0, 6.0), datetime.date(2026, 4, 1): (2.0, 0.5)},
+            standing=-0.5,
+        ),
+        "GENERATION": _kraken_days(
+            datetime.date(2026, 1, 1),
+            datetime.date(2026, 4, 19),
+            {datetime.date(2026, 1, 1): (10.0, -1.5), datetime.date(2026, 4, 1): (5.0, -0.6)},
+        ),
+    }
+
+    def _graphql_server(url, *, json=None, headers=None):
+        if headers.get("Authorization") == "Bearer stale_token":
+            return _FakeResponse(
+                {
+                    "data": None,
+                    "errors": [
+                        {
+                            "message": "Token expired",
+                            "extensions": {"errorCode": "KT-CT-1124", "errorType": "AUTH"},
+                        }
+                    ],
+                }
+            )
+        direction = json["variables"]["direction"]
+        return _FakeResponse(
+            {
+                "data": {
+                    "account": {
+                        "properties": [
+                            {
+                                "measurements": {
+                                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                    "edges": [
+                                        {
+                                            "node": {
+                                                "value": day.usage,
+                                                "startAt": datetime.datetime.combine(
+                                                    day.day,
+                                                    datetime.time.min,
+                                                    tzinfo=datetime.timezone.utc,
+                                                ).isoformat(),
+                                                "metaData": {
+                                                    "statistics": [
+                                                        {
+                                                            "type": "CONSUMPTION_COST",
+                                                            "costInclTax": {
+                                                                "estimatedAmount": int(
+                                                                    day.variable_cost * 100
+                                                                )
+                                                            },
+                                                        },
+                                                        {
+                                                            "type": "STANDING_CHARGE_COST",
+                                                            "costInclTax": {
+                                                                "estimatedAmount": int(
+                                                                    day.standing_charge * 100
+                                                                )
+                                                            },
+                                                        },
+                                                    ]
+                                                },
+                                            }
+                                        }
+                                        for day in days[direction]
+                                    ],
+                                }
+                            }
+                        ]
+                    }
+                }
+            }
+        )
+
+    auth_mock.websession.post = MagicMock(side_effect=_graphql_server)
+
+    with (
+        patch.object(
+            coord_mod.dt_util,
+            "utcnow",
+            return_value=datetime.datetime(2026, 4, 20, 12, tzinfo=datetime.timezone.utc),
+        ),
+        patch.object(
+            coord_mod.dt_util,
+            "as_local",
+            side_effect=lambda value: value.astimezone(AMSTERDAM),
+        ),
+        patch.object(
+            coord_mod, "_configured_time_zone_name", return_value="Europe/Amsterdam"
+        ),
+        patch.object(
+            ANWBConsumptionCoordinator,
+            "_async_fetch_kraken_daily_costs",
+            REAL_FETCH_KRAKEN_DAILY_COSTS,
+        ),
+        patch.object(coordinator, "_async_fetch_data", new_callable=AsyncMock) as fetch,
+        patch.object(coordinator, "_insert_statistics", new_callable=AsyncMock),
+    ):
+        fetch.side_effect = _april_account_cache
+        result = await coordinator._async_update_data()
+
+    assert coordinator._kraken_token == fresh_token
+    assert coordinator._async_get_kraken_token.call_count == 1
+    assert result["electricity_cost_source"] == "kraken_statistics"
+
+
+@pytest.mark.asyncio
+async def test_kraken_token_exchange_auth_failed_propagates_config_entry_auth_failed(auth_mock):
+    """When token exchange fails with ConfigEntryAuthFailed, it bubbles out."""
+    coordinator = _april_coordinator(auth_mock)
+    coordinator._kraken_token = "stale_token"
+    coordinator._async_get_kraken_token = AsyncMock(
+        side_effect=coord_mod.ConfigEntryAuthFailed("Failed to get kraken token")
+    )
+
+    def _graphql_server(url, *, json=None, headers=None):
+        return _FakeResponse(None, status=401)
+
+    auth_mock.websession.post = MagicMock(side_effect=_graphql_server)
+
+    with (
+        patch.object(
+            coord_mod.dt_util,
+            "utcnow",
+            return_value=datetime.datetime(2026, 4, 20, 12, tzinfo=datetime.timezone.utc),
+        ),
+        patch.object(
+            coord_mod.dt_util,
+            "as_local",
+            side_effect=lambda value: value.astimezone(AMSTERDAM),
+        ),
+        patch.object(
+            coord_mod, "_configured_time_zone_name", return_value="Europe/Amsterdam"
+        ),
+        patch.object(
+            ANWBConsumptionCoordinator,
+            "_async_fetch_kraken_daily_costs",
+            REAL_FETCH_KRAKEN_DAILY_COSTS,
+        ),
+        patch.object(coordinator, "_async_fetch_data", new_callable=AsyncMock) as fetch,
+        patch.object(coordinator, "_insert_statistics", new_callable=AsyncMock),
+    ):
+        fetch.side_effect = _april_account_cache
+        with pytest.raises(coord_mod.ConfigEntryAuthFailed, match="Failed to get kraken token"):
+            await coordinator._async_update_data()

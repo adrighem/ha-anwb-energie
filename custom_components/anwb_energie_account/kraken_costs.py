@@ -127,6 +127,10 @@ class KrakenCostError(Exception):
     """Raised when Kraken cost statistics are missing or malformed."""
 
 
+class KrakenAuthError(KrakenCostError):
+    """Raised when Kraken rejects the request as unauthorized or invalid token."""
+
+
 class KrakenSchemaError(KrakenCostError):
     """Raised when Kraken rejects the query as invalid for its schema."""
 
@@ -241,6 +245,27 @@ def _is_validation_error(payload: Mapping[str, Any]) -> bool:
             or extensions.get("code") in _VALIDATION_ERROR_TYPES
         ):
             return True
+    return False
+
+
+def is_auth_error_payload(payload: Mapping[str, Any]) -> bool:
+    """Return whether GraphQL payload contains authentication errors."""
+    for error in payload.get("errors") or []:
+        if not isinstance(error, Mapping):
+            continue
+        message = str(error.get("message") or "").upper()
+        if "AUTH" in message or "UNAUTHORIZED" in message:
+            return True
+        extensions = error.get("extensions")
+        if isinstance(extensions, Mapping):
+            error_type = str(extensions.get("errorType") or "").upper()
+            error_code = str(extensions.get("errorCode") or "").upper()
+            code = str(extensions.get("code") or "").upper()
+            if any(
+                "AUTH" in val or "UNAUTHORIZED" in val or "KT-CT" in val
+                for val in (error_type, error_code, code)
+            ):
+                return True
     return False
 
 
@@ -359,6 +384,8 @@ def parse_daily_costs_page(
         raise KrakenCostError("Kraken returned a non-object response")
 
     if message := _graphql_error_message(payload):
+        if is_auth_error_payload(payload):
+            raise KrakenAuthError(f"Kraken GraphQL authentication error: {message}")
         if _is_validation_error(payload):
             raise KrakenSchemaError(f"Kraken GraphQL validation error: {message}")
         raise KrakenCostError(f"Kraken GraphQL error: {message}")

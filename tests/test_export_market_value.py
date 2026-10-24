@@ -446,8 +446,8 @@ class _KrakenServer:
             self.labelled_posts += 1
             if self.reject == "http_400":
                 return _Response(status=400)
-            if self.reject == "http_401":
-                return _Response(status=401)
+            if self.reject == "http_500":
+                return _Response(status=500)
             if self.reject == "validation":
                 return _Response(
                     {
@@ -573,7 +573,7 @@ async def test_other_http_errors_do_not_downgrade_the_query(auth_mock, caplog):
     """Only a rejected query falls back; other errors keep their old path."""
     caplog.set_level(logging.WARNING)
     coordinator = _april_coordinator(auth_mock)
-    server = _KrakenServer(reject="http_401")
+    server = _KrakenServer(reject="http_500")
 
     result = await _run_april_update_via_graphql(coordinator, server)
 
