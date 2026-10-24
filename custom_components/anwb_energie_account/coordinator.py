@@ -55,6 +55,7 @@ from .kraken_costs import (
     LEGACY_DAILY_COSTS_QUERY,
     MARKET_VALUE_LABEL,
     Direction,
+    KrakenAuthError,
     KrakenCostError,
     KrakenDailyCost,
     KrakenElectricityCosts,
@@ -62,6 +63,7 @@ from .kraken_costs import (
     KrakenPeriodCosts,
     KrakenSchemaError,
     build_electricity_costs,
+    is_auth_error_payload,
     parse_daily_costs_page,
     sum_account_cache_fixed_costs,
     usage_matches,
@@ -86,6 +88,10 @@ _DNS_FAILURE_MARKERS = (
     "nodename nor servname",
     "temporary failure in name resolution",
 )
+
+
+class KrakenTokenExpired(UpdateFailed):
+    """Raised when the Kraken authentication token is expired or invalid."""
 
 # DAY and MONTH cache aggregates may round independently. Differences up to one
 # thousandth of a kWh/m³ (plus a 1e-6 relative tolerance) are treated as equal.
@@ -953,40 +959,23 @@ class ANWBBaseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 GRAPHQL_URL, json={"query": query, "variables": {}}, headers=headers
             ) as resp:
                 if resp.status in (401, 403):
-                    raise UpdateFailed(
+                    raise KrakenTokenExpired(
                         "Kraken token expired or invalid fetching account number"
                     )
                 resp.raise_for_status()
                 data = await resp.json()
                 errors = data.get("errors") or []
                 if errors:
-                    auth_error = False
-                    messages: list[str] = []
-                    for error in errors:
-                        if not isinstance(error, dict):
-                            continue
-
-                        message = error.get("message")
-                        message_text = str(message) if message else ""
-                        if message_text:
-                            messages.append(message_text)
-                        if "AUTH" in message_text.upper():
-                            auth_error = True
-
-                        extensions = error.get("extensions", {})
-                        if not isinstance(extensions, dict):
-                            continue
-
-                        error_type = str(extensions.get("errorType", "")).upper()
-                        error_code = str(extensions.get("errorCode", "")).upper()
-                        if "AUTH" in error_type or "AUTH" in error_code:
-                            auth_error = True
-
-                    if auth_error:
-                        raise UpdateFailed(
+                    if is_auth_error_payload(data):
+                        raise KrakenTokenExpired(
                             "Kraken token expired or invalid fetching account number"
                         )
 
+                    messages = [
+                        str(error.get("message"))
+                        for error in errors
+                        if isinstance(error, dict) and error.get("message")
+                    ]
                     message = "; ".join(messages) if messages else "unknown error"
                     raise UpdateFailed(
                         f"GraphQL error fetching account number: {message}"
@@ -1012,7 +1001,7 @@ class ANWBBaseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 return {"number": number, "address": address}
         except ClientError as err:
             if getattr(err, "status", None) in (401, 403):
-                raise UpdateFailed(
+                raise KrakenTokenExpired(
                     "Kraken token expired or invalid fetching account number"
                 ) from err
             raise UpdateFailed(f"Failed to fetch account number: {err}") from err
@@ -1033,7 +1022,7 @@ class ANWBBaseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             async with session.get(url, headers=headers) as resp:
                 if resp.status in (401, 403):
                     if kraken_token is not None:
-                        raise UpdateFailed(
+                        raise KrakenTokenExpired(
                             "Kraken token expired or invalid fetching data from "
                             f"{url}"
                         )
@@ -1047,7 +1036,7 @@ class ANWBBaseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except ClientError as err:
             if getattr(err, "status", None) in (401, 403):
                 if kraken_token is not None:
-                    raise UpdateFailed(
+                    raise KrakenTokenExpired(
                         "Kraken token expired or invalid fetching data from "
                         f"{url}"
                     ) from err
@@ -1147,7 +1136,7 @@ class ANWBPricingCoordinator(ANWBBaseCoordinator):
         except Exception as err:
             if isinstance(err, ConfigEntryAuthFailed):
                 raise
-            if isinstance(err, UpdateFailed) and "Kraken token expired" in str(err):
+            if isinstance(err, KrakenTokenExpired):
                 _LOGGER.debug("Kraken token expired, refreshing and retrying")
                 self._kraken_token = None
                 try:
@@ -1306,9 +1295,7 @@ class ANWBPricingCoordinator(ANWBBaseCoordinator):
 
         for local_day, result in zip(electricity_days, prices_results, strict=True):
             if isinstance(result, Exception):
-                if isinstance(result, UpdateFailed) and "Kraken token expired" in str(
-                    result
-                ):
+                if isinstance(result, KrakenTokenExpired):
                     raise result
                 _LOGGER.warning(
                     "Failed to fetch part of the electricity tariff window: %s",
@@ -1322,9 +1309,7 @@ class ANWBPricingCoordinator(ANWBBaseCoordinator):
 
         for result in gas_prices_results:
             if isinstance(result, Exception):
-                if isinstance(result, UpdateFailed) and "Kraken token expired" in str(
-                    result
-                ):
+                if isinstance(result, KrakenTokenExpired):
                     raise result
                 _LOGGER.warning(
                     "Failed to fetch part of the gas tariff window: %s",
@@ -1458,19 +1443,35 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
         query = DAILY_COSTS_QUERY if labelled else LEGACY_DAILY_COSTS_QUERY
         days: list[KrakenDailyCost] = []
         for _ in range(KRAKEN_MAX_PAGES):
-            async with self.auth.websession.post(
-                GRAPHQL_URL,
-                json={"query": query, "variables": dict(variables)},
-                headers=headers,
-            ) as resp:
-                resp.raise_for_status()
-                payload = await resp.json()
-            page, cursor = parse_daily_costs_page(
-                payload,
-                time_zone,
-                labelled=labelled,
-                label_log=self._kraken_label_log if labelled else None,
-            )
+            try:
+                async with self.auth.websession.post(
+                    GRAPHQL_URL,
+                    json={"query": query, "variables": dict(variables)},
+                    headers=headers,
+                ) as resp:
+                    status = getattr(resp, "status", getattr(resp, "_status", 200))
+                    if status in (401, 403):
+                        raise KrakenTokenExpired(
+                            f"Kraken token expired or invalid fetching daily costs (HTTP {status})"
+                        )
+                    resp.raise_for_status()
+                    payload = await resp.json()
+            except ClientError as err:
+                status = getattr(err, "status", None)
+                if status in (401, 403):
+                    raise KrakenTokenExpired(
+                        f"Kraken token expired or invalid fetching daily costs (HTTP {status})"
+                    ) from err
+                raise
+            try:
+                page, cursor = parse_daily_costs_page(
+                    payload,
+                    time_zone,
+                    labelled=labelled,
+                    label_log=self._kraken_label_log if labelled else None,
+                )
+            except KrakenAuthError as err:
+                raise KrakenTokenExpired(str(err)) from err
             days.extend(page)
             if cursor is None:
                 return days
@@ -1494,6 +1495,17 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
             ),
             return_exceptions=True,
         )
+        auth_failure = next(
+            (
+                result
+                for result in results
+                if isinstance(result, (KrakenTokenExpired, ConfigEntryAuthFailed))
+            ),
+            None,
+        )
+        if auth_failure is not None:
+            raise auth_failure
+
         failure = next(
             (result for result in results if isinstance(result, BaseException)),
             None,
@@ -1531,7 +1543,9 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
             self.last_successful_update = dt_util.utcnow()
             return data
         except Exception as err:
-            if isinstance(err, UpdateFailed) and "Kraken token expired" in str(err):
+            if isinstance(err, ConfigEntryAuthFailed):
+                raise
+            if isinstance(err, KrakenTokenExpired):
                 _LOGGER.debug("Kraken token expired, refreshing and retrying")
                 self._kraken_token = None
                 try:
@@ -1539,6 +1553,8 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
                     self.last_successful_update = dt_util.utcnow()
                     return data
                 except Exception as retry_err:
+                    if isinstance(retry_err, ConfigEntryAuthFailed):
+                        raise
                     if self._can_use_cached_data_for_dns_failure(retry_err):
                         _LOGGER.warning(
                             "DNS failure after token refresh, using cached data: %s",
@@ -1664,9 +1680,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
         for result in electricity_results[:2]:
             if not isinstance(result, Exception):
                 continue
-            if isinstance(result, UpdateFailed) and "Kraken token expired" in str(
-                result
-            ):
+            if isinstance(result, KrakenTokenExpired):
                 raise result
             _LOGGER.error("Failed to fetch current-month electricity data: %s", result)
             raise UpdateFailed(f"Electricity fetch failed: {result}") from result
@@ -1687,9 +1701,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
             strict=True,
         ):
             if isinstance(result, Exception):
-                if isinstance(result, UpdateFailed) and "Kraken token expired" in str(
-                    result
-                ):
+                if isinstance(result, KrakenTokenExpired):
                     raise result
                 _LOGGER.warning(
                     "Failed to fetch year-to-date electricity %s data: %s",
@@ -1719,9 +1731,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
         gas_yearly_fetch_succeeded = not isinstance(gas_results[1], Exception)
         for index, result in enumerate(gas_results):
             if isinstance(result, Exception):
-                if isinstance(result, UpdateFailed) and "Kraken token expired" in str(
-                    result
-                ):
+                if isinstance(result, KrakenTokenExpired):
                     raise result
                 _LOGGER.warning(
                     "Failed to fetch gas data, continuing without that response: %s",
@@ -1760,9 +1770,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
                 )
                 gas_daily_fetch_succeeded = True
             except Exception as result:
-                if isinstance(result, UpdateFailed) and "Kraken token expired" in str(
-                    result
-                ):
+                if isinstance(result, KrakenTokenExpired):
                     raise
                 _LOGGER.warning(
                     "Failed to fetch gas daily data, continuing without that "
@@ -1904,9 +1912,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
             sorted(electricity_hourly_days), prices_results, strict=True
         ):
             if isinstance(result, Exception):
-                if isinstance(result, UpdateFailed) and "Kraken token expired" in str(
-                    result
-                ):
+                if isinstance(result, KrakenTokenExpired):
                     raise result
                 _LOGGER.warning(
                     "Failed to fetch part of the electricity tariff window: %s",
@@ -1921,9 +1927,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
         gas_price_map: dict[str, float] = {}
         for result in gas_prices_results:
             if isinstance(result, Exception):
-                if isinstance(result, UpdateFailed) and "Kraken token expired" in str(
-                    result
-                ):
+                if isinstance(result, KrakenTokenExpired):
                     raise result
                 _LOGGER.warning(
                     "Failed to fetch part of the gas tariff window: %s",
@@ -1943,9 +1947,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
             strict=True,
         ):
             if isinstance(result, Exception):
-                if isinstance(result, UpdateFailed) and "Kraken token expired" in str(
-                    result
-                ):
+                if isinstance(result, KrakenTokenExpired):
                     raise result
                 _LOGGER.warning(
                     "Failed to fetch year-to-date %s daily tariffs: %s",
