@@ -19,7 +19,7 @@ sys.modules["homeassistant.components"] = MagicMock()
 sys.modules["homeassistant.components.application_credentials"] = MagicMock()
 sys.modules["homeassistant.helpers"] = MagicMock()
 sys.modules["homeassistant.helpers.event"] = MagicMock()
-sys.modules["homeassistant.helpers.entity_registry"] = MagicMock()
+sys.modules["homeassistant.helpers.entity_registry"] = MagicMock(async_get=MagicMock())
 sys.modules["homeassistant.helpers"].entity_registry = sys.modules[
     "homeassistant.helpers.entity_registry"
 ]
