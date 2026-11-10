@@ -25,7 +25,9 @@ ACCOUNT_SENTINEL = "A-SENTINEL-ACCOUNT-123"
 
 def _coordinator_boundaries() -> Any:
     """Load the coordinator's boundary helper without Home Assistant."""
-    source = (_INTEGRATION / "coordinator.py").read_text(encoding="utf-8")
+    time_utils_path = _INTEGRATION / "time_utils.py"
+    source_file = time_utils_path if time_utils_path.exists() else _INTEGRATION / "coordinator.py"
+    source = source_file.read_text(encoding="utf-8")
     wanted = {
         "_as_utc",
         "_format_account_cache_datetime",

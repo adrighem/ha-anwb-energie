@@ -9,7 +9,7 @@ import logging
 import math
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone, tzinfo
+from datetime import date, datetime, time, timedelta
 from typing import Any
 
 from aiohttp.client_exceptions import ClientError, ClientResponseError
@@ -75,6 +75,19 @@ from .tariff_cache import (
     TariffCache,
     parse_local_date,
 )
+from .time_utils import (
+    _account_cache_query_boundaries,
+    _as_local,
+    _as_utc,
+    _configured_time_zone,
+    _configured_time_zone_name,
+    _local_date_for_api_datetime,
+    _normalize_api_datetime_key,
+    _parse_api_datetime,
+    _provider_tariff_dates_for_local_day,
+    _stat_start_datetime,
+    _used_local_dates,
+)
 
 NET_METERING_END_DATE = datetime.fromisoformat(NET_METERING_END_DATE_STR)
 
@@ -93,158 +106,11 @@ _DNS_FAILURE_MARKERS = (
 class KrakenTokenExpired(UpdateFailed):
     """Raised when the Kraken authentication token is expired or invalid."""
 
+
 # DAY and MONTH cache aggregates may round independently. Differences up to one
 # thousandth of a kWh/m³ (plus a 1e-6 relative tolerance) are treated as equal.
 _USAGE_RECONCILIATION_ABS_TOLERANCE = 1e-3
 _USAGE_RECONCILIATION_REL_TOLERANCE = 1e-6
-
-
-def _as_utc(value: datetime) -> datetime:
-    """Return a timezone-aware UTC datetime."""
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
-
-
-def _as_local(value: datetime) -> datetime:
-    """Return a local datetime using Home Assistant's configured timezone."""
-    value = _as_utc(value)
-    try:
-        local_value = dt_util.as_local(value)
-    except (AttributeError, TypeError, ValueError):
-        local_value = None
-
-    if isinstance(local_value, datetime):
-        return local_value
-
-    return value.astimezone()
-
-
-def _parse_api_datetime(value: str | None) -> datetime | None:
-    """Parse an ANWB API datetime value as a timezone-aware datetime."""
-    if not value:
-        return None
-
-    normalized = value.replace("Z", "+00:00")
-    try:
-        parsed = datetime.fromisoformat(normalized)
-    except ValueError:
-        parsed = dt_util.parse_datetime(value)
-
-    if not isinstance(parsed, datetime):
-        return None
-
-    return _as_utc(parsed)
-
-
-def _normalize_api_datetime_key(value: str | None) -> str | None:
-    """Normalize an ANWB API datetime to the hourly UTC key used internally."""
-    parsed = _parse_api_datetime(value)
-    if parsed is None:
-        return None
-
-    return parsed.replace(minute=0, second=0, microsecond=0).strftime(
-        "%Y-%m-%dT%H:00:00.000Z"
-    )
-
-
-def _local_date_for_api_datetime(value: str | None) -> date | None:
-    """Return the Home Assistant local date for an ANWB API datetime."""
-    parsed = _parse_api_datetime(value)
-    if parsed is None:
-        return None
-
-    return _as_local(parsed).date()
-
-
-def _configured_time_zone() -> tzinfo:
-    """Return Home Assistant's configured timezone with a safe UTC fallback."""
-    configured = getattr(dt_util, "DEFAULT_TIME_ZONE", None)
-    return configured if isinstance(configured, tzinfo) else timezone.utc
-
-
-def _configured_time_zone_name() -> str:
-    """Return the configured timezone name used by the tariff cache."""
-    configured = _configured_time_zone()
-    key = getattr(configured, "key", None)
-    return key if isinstance(key, str) else str(configured)
-
-
-def _format_account_cache_datetime(value: datetime) -> str:
-    """Format an account-cache timestamp as an exact UTC boundary."""
-    utc_value = _as_utc(value)
-    return f"{utc_value.isoformat(timespec='milliseconds').removesuffix('+00:00')}Z"
-
-
-def _account_cache_query_boundaries(now: datetime) -> tuple[str, str, str]:
-    """Return UTC month start/end and year start for account-cache queries."""
-    month_start = now.replace(
-        day=1,
-        hour=0,
-        minute=0,
-        second=0,
-        microsecond=0,
-    )
-    next_month_start = (
-        month_start.replace(year=month_start.year + 1, month=1)
-        if month_start.month == 12
-        else month_start.replace(month=month_start.month + 1)
-    )
-    year_start = month_start.replace(month=1)
-
-    return (
-        _format_account_cache_datetime(month_start),
-        _format_account_cache_datetime(
-            _as_utc(next_month_start) - timedelta(milliseconds=1)
-        ),
-        _format_account_cache_datetime(year_start),
-    )
-
-
-
-
-def _provider_tariff_dates_for_local_day(local_day: date) -> tuple[date, ...]:
-    """Return UTC calendar dates containing a Home Assistant local day."""
-    local_tz = _configured_time_zone()
-    start = datetime.combine(local_day, time.min, tzinfo=local_tz).astimezone(
-        timezone.utc
-    )
-    end = (
-        datetime.combine(
-            local_day + timedelta(days=1),
-            time.min,
-            tzinfo=local_tz,
-        ).astimezone(timezone.utc)
-        - timedelta(microseconds=1)
-    )
-    first_date = start.date()
-    last_date = end.date()
-    return tuple(
-        first_date + timedelta(days=offset)
-        for offset in range((last_date - first_date).days + 1)
-    )
-
-
-def _used_local_dates(data_list: list[dict[str, Any]]) -> set[date]:
-    """Return local dates containing non-zero usage that require a tariff."""
-    used_dates: set[date] = set()
-    for data in data_list:
-        if data.get("usage", 0.0) == 0:
-            continue
-        if local_date := _local_date_for_api_datetime(data.get("startDate")):
-            used_dates.add(local_date)
-    return used_dates
-
-
-def _stat_start_datetime(value: Any) -> datetime | None:
-    """Return a timezone-aware UTC datetime for a recorder statistic start value."""
-    if isinstance(value, datetime):
-        return _as_utc(value)
-    if isinstance(value, (float, int)):
-        return datetime.fromtimestamp(value, timezone.utc)
-    if isinstance(value, str):
-        return _parse_api_datetime(value)
-    return None
 
 
 def _numeric_tariff_value(value: Any) -> float | None:
@@ -398,16 +264,12 @@ def _usage_and_variable_cost(
         required_intervals += 1
         timestamp = interval_key(data.get("startDate"))
         price_cents = (
-            _numeric_tariff_value(price_map.get(timestamp))
-            if timestamp is not None
-            else None
+            _numeric_tariff_value(price_map.get(timestamp)) if timestamp is not None else None
         )
         if price_cents is None:
             missing_intervals_count += 1
             if len(missing_intervals) < 5:
-                missing_intervals.append(
-                    timestamp or str(data.get("startDate") or "<missing>")
-                )
+                missing_intervals.append(timestamp or str(data.get("startDate") or "<missing>"))
             continue
 
         matched_intervals += 1
@@ -436,15 +298,12 @@ def _reconcile_current_month_variable_cost(
     authoritative_rows = [
         data
         for data in monthly_data
-        if _local_date_for_api_datetime(data.get("startDate"))
-        == current_month_start
+        if _local_date_for_api_datetime(data.get("startDate")) == current_month_start
     ]
     if not authoritative_rows:
         return variable_cost, coverage
 
-    authoritative_usage = sum(
-        data.get("usage", 0.0) for data in authoritative_rows
-    )
+    authoritative_usage = sum(data.get("usage", 0.0) for data in authoritative_rows)
     if math.isclose(
         hourly_usage,
         authoritative_usage,
@@ -548,9 +407,7 @@ def _year_to_date_variable_cost(
         daily_data,
         current_month_start,
     )
-    authoritative_usage = sum(
-        data.get("usage", 0.0) for data in closed_authoritative_data
-    )
+    authoritative_usage = sum(data.get("usage", 0.0) for data in closed_authoritative_data)
     daily_usage = sum(data.get("usage", 0.0) for data in closed_daily_data)
 
     (
@@ -705,11 +562,7 @@ def _split_at_provider_coverage(
     tail: list[dict[str, Any]] = []
     for data in data_list:
         local_date = _local_date_for_api_datetime(data.get("startDate"))
-        if (
-            covered_through is not None
-            and local_date is not None
-            and local_date <= covered_through
-        ):
+        if covered_through is not None and local_date is not None and local_date <= covered_through:
             covered.append(data)
         else:
             tail.append(data)
@@ -778,9 +631,7 @@ def _provider_electricity_costs(
     ):
         return "current_month_usage_mismatch"
 
-    _, tail_import_cost, tail_import_coverage = _usage_and_variable_cost(
-        tail_import, price_map
-    )
+    _, tail_import_cost, tail_import_coverage = _usage_and_variable_cost(tail_import, price_map)
     tail_kwh, tail_export_cost, tail_export_coverage = _usage_and_variable_cost(
         tail_export, export_price_map
     )
@@ -801,14 +652,10 @@ def _provider_electricity_costs(
             result = _provider_coverage(period.days, through, tail_coverage)
             # With a fully priced tail, only an unknown market split is missing.
             if value(period) is None and result["complete"]:
-                return _unavailable_tariff_coverage(
-                    "kraken_market_split_unknown", result
-                )
+                return _unavailable_tariff_coverage("kraken_market_split_unknown", result)
             return result
 
-        return _PeriodAmounts(
-            value(month), coverage(month), value(year), coverage(year)
-        )
+        return _PeriodAmounts(value(month), coverage(month), value(year), coverage(year))
 
     # Kraken reports generation as negative costs; sensors expose a credit.
     return _ProviderElectricityCosts(
@@ -830,10 +677,7 @@ def _provider_electricity_costs(
             provider.year_export,
             tail_market_coverage,
         ),
-        fixed_cost=(
-            provider.month_import.standing_charge
-            + provider.month_export.standing_charge
-        ),
+        fixed_cost=(provider.month_import.standing_charge + provider.month_export.standing_charge),
         covered_through=through,
         export_month_breakdown=booked_breakdown(
             provider.month_export,
@@ -977,9 +821,7 @@ class ANWBBaseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         if isinstance(error, dict) and error.get("message")
                     ]
                     message = "; ".join(messages) if messages else "unknown error"
-                    raise UpdateFailed(
-                        f"GraphQL error fetching account number: {message}"
-                    )
+                    raise UpdateFailed(f"GraphQL error fetching account number: {message}")
 
                 payload = data.get("data") or {}
                 viewer = payload.get("viewer") or {}
@@ -991,11 +833,7 @@ class ANWBBaseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 number = account.get("number", "unknown")
                 address = ""
                 properties = account.get("properties", [])
-                if (
-                    properties
-                    and isinstance(properties, list)
-                    and properties[0].get("address")
-                ):
+                if properties and isinstance(properties, list) and properties[0].get("address"):
                     address = properties[0]["address"]
 
                 return {"number": number, "address": address}
@@ -1013,22 +851,15 @@ class ANWBBaseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     ) -> dict[str, Any]:
         """Fetch JSON data from API."""
         session = self.auth.websession
-        headers = (
-            {"Authorization": f"Bearer {kraken_token}"}
-            if kraken_token is not None
-            else None
-        )
+        headers = {"Authorization": f"Bearer {kraken_token}"} if kraken_token is not None else None
         try:
             async with session.get(url, headers=headers) as resp:
                 if resp.status in (401, 403):
                     if kraken_token is not None:
                         raise KrakenTokenExpired(
-                            "Kraken token expired or invalid fetching data from "
-                            f"{url}"
+                            f"Kraken token expired or invalid fetching data from {url}"
                         )
-                    raise UpdateFailed(
-                        f"Public tariff request was unauthorized for {url}"
-                    )
+                    raise UpdateFailed(f"Public tariff request was unauthorized for {url}")
                 if resp.status == 404:
                     return {}
                 resp.raise_for_status()
@@ -1037,12 +868,9 @@ class ANWBBaseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if getattr(err, "status", None) in (401, 403):
                 if kraken_token is not None:
                     raise KrakenTokenExpired(
-                        "Kraken token expired or invalid fetching data from "
-                        f"{url}"
+                        f"Kraken token expired or invalid fetching data from {url}"
                     ) from err
-                raise UpdateFailed(
-                    f"Public tariff request was unauthorized for {url}"
-                ) from err
+                raise UpdateFailed(f"Public tariff request was unauthorized for {url}") from err
             raise UpdateFailed(f"Error fetching data from {url}: {err}") from err
 
     async def _async_fetch_hourly_tariffs(
@@ -1197,17 +1025,13 @@ class ANWBPricingCoordinator(ANWBBaseCoordinator):
                 today,
                 gas_prices,
             )
-            has_tomorrow_electricity = (
-                self.tariff_cache.hourly_prices_are_complete(
-                    tomorrow,
-                    prices,
-                )
+            has_tomorrow_electricity = self.tariff_cache.hourly_prices_are_complete(
+                tomorrow,
+                prices,
             )
-            has_tomorrow_market_price = (
-                self.tariff_cache.hourly_prices_are_complete(
-                    tomorrow,
-                    market_prices,
-                )
+            has_tomorrow_market_price = self.tariff_cache.hourly_prices_are_complete(
+                tomorrow,
+                market_prices,
             )
             has_tomorrow_gas = self.tariff_cache.hourly_prices_are_complete(
                 tomorrow,
@@ -1219,15 +1043,11 @@ class ANWBPricingCoordinator(ANWBBaseCoordinator):
             or not has_today_market_price
             or (
                 local_now.hour >= 13
-                and (
-                    not has_tomorrow_electricity
-                    or not has_tomorrow_market_price
-                )
+                and (not has_tomorrow_electricity or not has_tomorrow_market_price)
             )
         )
         fetch_gas = gas_applicable and (
-            not has_today_gas
-            or (local_now.hour >= 6 and not has_tomorrow_gas)
+            not has_today_gas or (local_now.hour >= 6 and not has_tomorrow_gas)
         )
 
         if not self.data:
@@ -1243,16 +1063,12 @@ class ANWBPricingCoordinator(ANWBBaseCoordinator):
                 data["_raw_gas_price_map"] = {}
             return data
 
-        price_map = _numeric_tariff_map(
-            self.data.get("_raw_price_map", {}) if self.data else {}
-        )
+        price_map = _numeric_tariff_map(self.data.get("_raw_price_map", {}) if self.data else {})
         market_price_map = _numeric_tariff_map(
             self.data.get("_raw_market_price_map", {}) if self.data else {}
         )
         gas_price_map = (
-            _numeric_tariff_map(
-                self.data.get("_raw_gas_price_map", {}) if self.data else {}
-            )
+            _numeric_tariff_map(self.data.get("_raw_gas_price_map", {}) if self.data else {})
             if gas_applicable
             else {}
         )
@@ -1401,19 +1217,14 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
                         err,
                     )
             else:
-                if direction == "GENERATION" and any(
-                    day.market_value is None for day in days
-                ):
+                if direction == "GENERATION" and any(day.market_value is None for day in days):
                     self._kraken_label_log.once(
                         logging.WARNING,
-                        "Kraken generation days lack a %s line; export market "
-                        "value is unknown",
+                        "Kraken generation days lack a %s line; export market value is unknown",
                         MARKET_VALUE_LABEL,
                     )
                 return days
-        return await self._async_fetch_kraken_pages(
-            direction, start, end_exclusive, labelled=False
-        )
+        return await self._async_fetch_kraken_pages(direction, start, end_exclusive, labelled=False)
 
     async def _async_fetch_kraken_pages(
         self,
@@ -1428,9 +1239,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
         variables: dict[str, Any] = {
             "accountNumber": self._account_number,
             "startAt": datetime.combine(start, time.min, tzinfo=time_zone).isoformat(),
-            "endAt": datetime.combine(
-                end_exclusive, time.min, tzinfo=time_zone
-            ).isoformat(),
+            "endAt": datetime.combine(end_exclusive, time.min, tzinfo=time_zone).isoformat(),
             "timezone": _configured_time_zone_name(),
             "direction": direction,
             "first": KRAKEN_PAGE_SIZE,
@@ -1487,12 +1296,8 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
         year_start = current_month_start.replace(month=1)
         end_exclusive = now.date() + timedelta(days=1)
         results = await asyncio.gather(
-            self._async_fetch_kraken_daily_costs(
-                "CONSUMPTION", year_start, end_exclusive
-            ),
-            self._async_fetch_kraken_daily_costs(
-                "GENERATION", year_start, end_exclusive
-            ),
+            self._async_fetch_kraken_daily_costs("CONSUMPTION", year_start, end_exclusive),
+            self._async_fetch_kraken_daily_costs("GENERATION", year_start, end_exclusive),
             return_exceptions=True,
         )
         auth_failure = next(
@@ -1512,10 +1317,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
         )
         if failure is None:
             self._kraken_daily_costs = (year_start, results[0], results[1])
-        elif (
-            self._kraken_daily_costs is not None
-            and self._kraken_daily_costs[0] == year_start
-        ):
+        elif self._kraken_daily_costs is not None and self._kraken_daily_costs[0] == year_start:
             _LOGGER.debug(
                 "Kraken cost statistics unavailable, reusing the last result: %s",
                 failure,
@@ -1594,12 +1396,8 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
             microsecond=0,
         ).isoformat()
         previous_data = self.data if isinstance(self.data, dict) else {}
-        same_month_as_previous = (
-            previous_data.get("monthly_period_start") == monthly_period_start
-        )
-        same_year_as_previous = (
-            previous_data.get("yearly_period_start") == yearly_period_start
-        )
+        same_month_as_previous = previous_data.get("monthly_period_start") == monthly_period_start
+        same_year_as_previous = previous_data.get("yearly_period_start") == yearly_period_start
         start, end, c_start = _account_cache_query_boundaries(now)
         last_day = calendar.monthrange(now.year, now.month)[1]
 
@@ -1674,9 +1472,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
             )
             electricity_result_labels.extend(("import_daily", "export_daily"))
 
-        electricity_results = await asyncio.gather(
-            *import_tasks, return_exceptions=True
-        )
+        electricity_results = await asyncio.gather(*import_tasks, return_exceptions=True)
         for result in electricity_results[:2]:
             if not isinstance(result, Exception):
                 continue
@@ -1742,17 +1538,11 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
             else:
                 res_import_gas_year = result
 
-        inferred_has_gas = bool(
-            res_import_gas.get("data") or res_import_gas_year.get("data")
-        )
+        inferred_has_gas = bool(res_import_gas.get("data") or res_import_gas_year.get("data"))
 
-        previous_has_gas = bool(
-            isinstance(self.data, dict) and self.data.get("has_gas") is True
-        )
+        previous_has_gas = bool(isinstance(self.data, dict) and self.data.get("has_gas") is True)
         gas_caches_are_definitively_empty = (
-            gas_hourly_fetch_succeeded
-            and gas_yearly_fetch_succeeded
-            and not inferred_has_gas
+            gas_hourly_fetch_succeeded and gas_yearly_fetch_succeeded and not inferred_has_gas
         )
         retain_previous_has_gas = previous_has_gas and (
             not gas_caches_are_definitively_empty
@@ -1773,8 +1563,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
                 if isinstance(result, KrakenTokenExpired):
                     raise
                 _LOGGER.warning(
-                    "Failed to fetch gas daily data, continuing without that "
-                    "response: %s",
+                    "Failed to fetch gas daily data, continuing without that response: %s",
                     result,
                 )
 
@@ -1787,27 +1576,17 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
             res_export_year.get("data", []) or [] if export_year_fetch_succeeded else []
         )
         import_daily_data = (
-            res_import_daily.get("data", []) or []
-            if import_daily_fetch_succeeded
-            else []
+            res_import_daily.get("data", []) or [] if import_daily_fetch_succeeded else []
         )
         export_daily_data = (
-            res_export_daily.get("data", []) or []
-            if export_daily_fetch_succeeded
-            else []
+            res_export_daily.get("data", []) or [] if export_daily_fetch_succeeded else []
         )
-        gas_data = (
-            res_import_gas.get("data", []) or [] if gas_hourly_fetch_succeeded else []
-        )
+        gas_data = res_import_gas.get("data", []) or [] if gas_hourly_fetch_succeeded else []
         gas_year_data = (
-            res_import_gas_year.get("data", []) or []
-            if gas_yearly_fetch_succeeded
-            else []
+            res_import_gas_year.get("data", []) or [] if gas_yearly_fetch_succeeded else []
         )
         gas_daily_data = (
-            res_import_gas_daily.get("data", []) or []
-            if gas_daily_fetch_succeeded
-            else []
+            res_import_gas_daily.get("data", []) or [] if gas_daily_fetch_succeeded else []
         )
 
         current_month_start = now.date().replace(day=1)
@@ -1908,9 +1687,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
 
         price_map: dict[str, float] = {}
         market_price_map: dict[str, float] = {}
-        for local_day, result in zip(
-            sorted(electricity_hourly_days), prices_results, strict=True
-        ):
+        for local_day, result in zip(sorted(electricity_hourly_days), prices_results, strict=True):
             if isinstance(result, Exception):
                 if isinstance(result, KrakenTokenExpired):
                     raise result
@@ -1955,21 +1732,15 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
                     result,
                 )
                 required_dates = (
-                    electricity_daily_dates
-                    if kind == "electricity"
-                    else gas_daily_dates
+                    electricity_daily_dates if kind == "electricity" else gas_daily_dates
                 )
-                cached_tariffs = (
-                    await self.tariff_cache.async_get_cached_daily_tariffs(
-                        kind,
-                        required_dates,
-                    )
+                cached_tariffs = await self.tariff_cache.async_get_cached_daily_tariffs(
+                    kind,
+                    required_dates,
                 )
                 if kind == "electricity":
                     daily_electricity_price_map = dict(cached_tariffs.all_in_prices)
-                    daily_electricity_market_price_map = dict(
-                        cached_tariffs.market_prices
-                    )
+                    daily_electricity_market_price_map = dict(cached_tariffs.market_prices)
                 else:
                     daily_gas_price_map = dict(cached_tariffs.all_in_prices)
                 continue
@@ -2064,9 +1835,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
         # app): they price every hour, include the provider's net-metering and
         # real fixed charges, and switch to market-price export automatically.
         # Intervals after the last covered day keep the hourly calculation.
-        provider_result = await self._async_get_kraken_electricity_costs(
-            now, current_month_start
-        )
+        provider_result = await self._async_get_kraken_electricity_costs(now, current_month_start)
         provider_costs: _ProviderElectricityCosts | None = None
         if isinstance(provider_result, str):
             provider_costs_status = provider_result
@@ -2146,14 +1915,12 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
             gas_usage, gas_cost, gas_tariff_coverage = _usage_and_variable_cost(
                 gas_data, gas_price_map
             )
-            gas_cost, gas_tariff_coverage = (
-                _reconcile_current_month_variable_cost(
-                    gas_usage,
-                    gas_cost,
-                    gas_tariff_coverage,
-                    gas_year_data,
-                    current_month_start,
-                )
+            gas_cost, gas_tariff_coverage = _reconcile_current_month_variable_cost(
+                gas_usage,
+                gas_cost,
+                gas_tariff_coverage,
+                gas_year_data,
+                current_month_start,
             )
             gas_month_data_available = True
         else:
@@ -2176,9 +1943,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
         elif reuse_cached_import_year:
             yearly_import_usage = previous_data["electricity_import_year_to_date"]
         elif import_year_fetch_succeeded:
-            yearly_import_usage = sum(
-                data.get("usage", 0.0) for data in import_year_data
-            )
+            yearly_import_usage = sum(data.get("usage", 0.0) for data in import_year_data)
         else:
             yearly_import_usage = None
 
@@ -2187,9 +1952,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
         elif reuse_cached_export_year:
             yearly_export_usage = previous_data["electricity_export_year_to_date"]
         elif export_year_fetch_succeeded:
-            yearly_export_usage = sum(
-                data.get("usage", 0.0) for data in export_year_data
-            )
+            yearly_export_usage = sum(data.get("usage", 0.0) for data in export_year_data)
         else:
             yearly_export_usage = None
 
@@ -2257,9 +2020,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
             gas_fixed_cost_source = "not_applicable"
         elif reuse_cached_gas_month:
             total_fixed_costs_gas = previous_data.get("gas_month_to_date_fixed_cost")
-            gas_fixed_cost_source = previous_data.get(
-                "gas_fixed_cost_source", "unavailable"
-            )
+            gas_fixed_cost_source = previous_data.get("gas_fixed_cost_source", "unavailable")
         elif not gas_hourly_fetch_succeeded:
             total_fixed_costs_gas = None
             gas_fixed_cost_source = "unavailable"
@@ -2315,15 +2076,11 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
             "electricity_import_tariff_coverage": imports.month_coverage,
             "electricity_export_tariff_coverage": export_credit.month_coverage,
             "electricity_import_year_to_date_tariff_coverage": imports.year_coverage,
-            "electricity_export_year_to_date_tariff_coverage": (
-                export_credit.year_coverage
-            ),
+            "electricity_export_year_to_date_tariff_coverage": (export_credit.year_coverage),
             "electricity_fixed_cost_source": electricity_fixed_cost_source,
             "electricity_export_month_to_date_market_value": export_market.month,
             "electricity_export_year_to_date_market_value": export_market.year,
-            "electricity_export_market_value_tariff_coverage": (
-                export_market.month_coverage
-            ),
+            "electricity_export_market_value_tariff_coverage": (export_market.month_coverage),
             "electricity_export_year_to_date_market_value_tariff_coverage": (
                 export_market.year_coverage
             ),
@@ -2337,9 +2094,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
                 if provider_costs is not None and export_credit.year is not None
                 else None
             ),
-            "export_price_basis": (
-                "market" if now >= NET_METERING_END_DATE else "all_in"
-            ),
+            "export_price_basis": ("market" if now >= NET_METERING_END_DATE else "all_in"),
             "gas_month_to_date": gas_usage,
             "gas_month_to_date_cost": gas_cost,
             "gas_year_to_date": yearly_gas_usage,
@@ -2367,9 +2122,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
             "total_cost_gas": total_cost_gas,
             "monthly_period_start": monthly_period_start,
             "yearly_period_start": yearly_period_start,
-            "year_to_date_cost_calculation_method": (
-                "daily_closed_months_hourly_current_month"
-            ),
+            "year_to_date_cost_calculation_method": ("daily_closed_months_hourly_current_month"),
             "electricity_year_to_date_cost_calculation_method": (
                 "kraken_daily_statistics_hourly_tail"
                 if provider_costs is not None
@@ -2381,8 +2134,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
             "electricity_provider_costs_status": provider_costs_status,
             "electricity_provider_costs_through": (
                 provider_costs.covered_through.isoformat()
-                if provider_costs is not None
-                and provider_costs.covered_through is not None
+                if provider_costs is not None and provider_costs.covered_through is not None
                 else None
             ),
             "account_number": self._account_number,
@@ -2413,11 +2165,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
             unit_class = (
                 None
                 if is_cost
-                else (
-                    "energy"
-                    if "import" in sensor_type or "export" in sensor_type
-                    else "volume"
-                )
+                else ("energy" if "import" in sensor_type or "export" in sensor_type else "volume")
             )
             unit = (
                 CURRENCY_EURO
@@ -2428,17 +2176,14 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
                     else UnitOfVolume.CUBIC_METERS
                 )
             )
-            statistic_id = (
-                f"{DOMAIN}:{sensor_type}_{self._account_number}".lower().replace(
-                    "-", "_"
-                )
+            statistic_id = f"{DOMAIN}:{sensor_type}_{self._account_number}".lower().replace(
+                "-", "_"
             )
 
             parsed_data = [
                 (start_time, data)
                 for data in data_list
-                if (start_time := _parse_api_datetime(data.get("startDate")))
-                is not None
+                if (start_time := _parse_api_datetime(data.get("startDate"))) is not None
             ]
             parsed_data.sort(key=lambda item: item[0])
             if not parsed_data:
@@ -2456,10 +2201,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
                     )
                     if price_cents is None:
                         if usage != 0:
-                            if (
-                                sensor_type == "export_cost"
-                                and start_time >= NET_METERING_END_DATE
-                            ):
+                            if sensor_type == "export_cost" and start_time >= NET_METERING_END_DATE:
                                 _LOGGER.warning(
                                     "Missing electricity market tariff for export statistics "
                                     "insertion at %s",
@@ -2495,8 +2237,7 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
                 existing_stats = [
                     (stat_start, row)
                     for row in stat[statistic_id]
-                    if (stat_start := _stat_start_datetime(row.get("start")))
-                    is not None
+                    if (stat_start := _stat_start_datetime(row.get("start"))) is not None
                 ]
                 existing_stats.sort(key=lambda item: item[0])
 
@@ -2523,25 +2264,17 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
 
             first_write_time = desired_values[write_from][0]
             preceding_stats = [
-                row
-                for stat_start, row in existing_stats
-                if stat_start < first_write_time
+                row for stat_start, row in existing_stats if stat_start < first_write_time
             ]
             if preceding_stats:
-                running_sum = (
-                    _numeric_tariff_value(preceding_stats[-1].get("sum")) or 0.0
-                )
+                running_sum = _numeric_tariff_value(preceding_stats[-1].get("sum")) or 0.0
             else:
                 first_existing = existing_by_start.get(first_write_time)
                 existing_sum = (
-                    _numeric_tariff_value(first_existing.get("sum"))
-                    if first_existing
-                    else None
+                    _numeric_tariff_value(first_existing.get("sum")) if first_existing else None
                 )
                 existing_state = (
-                    _numeric_tariff_value(first_existing.get("state"))
-                    if first_existing
-                    else None
+                    _numeric_tariff_value(first_existing.get("state")) if first_existing else None
                 )
                 running_sum = (
                     existing_sum - existing_state
