@@ -6,7 +6,6 @@ import asyncio
 import calendar
 import functools
 import logging
-import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -24,7 +23,6 @@ from homeassistant.components.recorder.statistics import (
     statistics_during_period,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CURRENCY_EURO, UnitOfEnergy, UnitOfVolume
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -81,6 +79,7 @@ from .provider_costs import (
     _ProviderElectricityCosts,
     _split_at_provider_coverage,
 )
+from .statistics_import import async_insert_statistics
 from .tariff_cache import (
     Commodity,
     DailyTariffData,
@@ -1591,160 +1590,17 @@ class ANWBConsumptionCoordinator(ANWBBaseCoordinator):
         export_price_map: dict[str, float],
     ) -> None:
         """Insert ANWB statistics."""
-        for sensor_type, is_cost, data_list, p_map in [
-            ("import_usage", False, import_data, price_map),
-            ("export_usage", False, export_data, price_map),
-            ("import_cost", True, import_data, price_map),
-            ("export_cost", True, export_data, export_price_map),
-            ("gas_usage", False, gas_data, gas_price_map),
-            ("gas_cost", True, gas_data, gas_price_map),
-        ]:
-            if not data_list:
-                continue
+        await async_insert_statistics(
+            self.hass,
+            self._account_number,
+            import_data,
+            export_data,
+            price_map,
+            gas_data,
+            gas_price_map,
+            export_price_map,
+        )
 
-            unit_class = (
-                None
-                if is_cost
-                else ("energy" if "import" in sensor_type or "export" in sensor_type else "volume")
-            )
-            unit = (
-                CURRENCY_EURO
-                if is_cost
-                else (
-                    UnitOfEnergy.KILO_WATT_HOUR
-                    if "import" in sensor_type or "export" in sensor_type
-                    else UnitOfVolume.CUBIC_METERS
-                )
-            )
-            statistic_id = f"{DOMAIN}:{sensor_type}_{self._account_number}".lower().replace(
-                "-", "_"
-            )
-
-            parsed_data = [
-                (start_time, data)
-                for data in data_list
-                if (start_time := _parse_api_datetime(data.get("startDate"))) is not None
-            ]
-            parsed_data.sort(key=lambda item: item[0])
-            if not parsed_data:
-                continue
-
-            desired_values: list[tuple[datetime, float]] = []
-            for start_time, data in parsed_data:
-                usage = data.get("usage", 0.0)
-                if is_cost:
-                    timestamp = _normalize_api_datetime_key(data.get("startDate"))
-                    price_cents = (
-                        _numeric_tariff_value(p_map.get(timestamp))
-                        if timestamp is not None
-                        else None
-                    )
-                    if price_cents is None:
-                        if usage != 0:
-                            if sensor_type == "export_cost" and start_time >= NET_METERING_END_DATE:
-                                _LOGGER.warning(
-                                    "Missing electricity market tariff for export statistics "
-                                    "insertion at %s",
-                                    start_time.isoformat(),
-                                )
-                            break
-                        value = 0.0
-                    else:
-                        value = (usage * price_cents) / 100.0
-                else:
-                    value = usage
-
-                desired_values.append((start_time, value))
-
-            if not desired_values:
-                continue
-
-            from_time = parsed_data[0][0]
-            start = from_time - timedelta(hours=1)
-            stat = await get_instance(self.hass).async_add_executor_job(
-                statistics_during_period,
-                self.hass,
-                start,
-                None,
-                {statistic_id},
-                "hour",
-                None,
-                {"state", "sum"},
-            )
-
-            existing_stats: list[tuple[datetime, dict[str, Any]]] = []
-            if statistic_id in stat and stat[statistic_id]:
-                existing_stats = [
-                    (stat_start, row)
-                    for row in stat[statistic_id]
-                    if (stat_start := _stat_start_datetime(row.get("start"))) is not None
-                ]
-                existing_stats.sort(key=lambda item: item[0])
-
-            existing_by_start = dict(existing_stats)
-            write_from = None
-            for index, (start_time, value) in enumerate(desired_values):
-                existing = existing_by_start.get(start_time)
-                if existing is None:
-                    write_from = index
-                    break
-
-                existing_state = _numeric_tariff_value(existing.get("state"))
-                if existing_state is not None and not math.isclose(
-                    existing_state,
-                    value,
-                    rel_tol=1e-9,
-                    abs_tol=1e-9,
-                ):
-                    write_from = index
-                    break
-
-            if write_from is None:
-                continue
-
-            first_write_time = desired_values[write_from][0]
-            preceding_stats = [
-                row for stat_start, row in existing_stats if stat_start < first_write_time
-            ]
-            if preceding_stats:
-                running_sum = _numeric_tariff_value(preceding_stats[-1].get("sum")) or 0.0
-            else:
-                first_existing = existing_by_start.get(first_write_time)
-                existing_sum = (
-                    _numeric_tariff_value(first_existing.get("sum")) if first_existing else None
-                )
-                existing_state = (
-                    _numeric_tariff_value(first_existing.get("state")) if first_existing else None
-                )
-                running_sum = (
-                    existing_sum - existing_state
-                    if existing_sum is not None and existing_state is not None
-                    else 0.0
-                )
-
-            statistics = []
-            for start_time, value in desired_values[write_from:]:
-                running_sum += value
-                statistics.append(
-                    StatisticData(
-                        start=start_time,
-                        state=value,
-                        sum=running_sum,
-                    )
-                )
-
-            if statistics:
-                name = sensor_type.replace("_", " ").title()
-                metadata = StatisticMetaData(
-                    mean_type=StatisticMeanType.NONE,
-                    has_sum=True,
-                    name=f"ANWB Account {self._account_number} {name}",
-                    source=DOMAIN,
-                    statistic_id=statistic_id,
-                    unit_class=unit_class,
-                    unit_of_measurement=unit,
-                )
-                async_add_external_statistics(self.hass, metadata, statistics)
 
 
 @dataclass
@@ -1766,9 +1622,15 @@ __all__ = [
     "ANWBPricingCoordinator",
     "KrakenTokenExpired",
     "NET_METERING_END_DATE",
+    "StatisticData",
+    "StatisticMeanType",
+    "StatisticMetaData",
     "_MeterRows",
     "_PeriodAmounts",
     "_ProviderElectricityCosts",
+    "async_add_external_statistics",
+    "get_instance",
+    "statistics_during_period",
     "_USAGE_RECONCILIATION_ABS_TOLERANCE",
     "_USAGE_RECONCILIATION_REL_TOLERANCE",
     "_account_cache_query_boundaries",
